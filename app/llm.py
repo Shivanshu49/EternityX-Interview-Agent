@@ -59,6 +59,22 @@ class LLMRefusal(LLMError):
     """Safety classifiers declined the request."""
 
 
+class LLMConfigurationError(LLMError):
+    """No usable Anthropic credential. A deployment problem, not a model one."""
+
+
+_MISSING_CREDENTIAL_HINT = (
+    "No Anthropic credential found. Set ANTHROPIC_API_KEY in the environment "
+    "the server runs in (a .env file is not read automatically), then restart."
+)
+
+
+def _is_missing_credential(exc: Exception) -> bool:
+    """The SDK signals absent auth as a TypeError at request time, not at init."""
+    message = str(exc).lower()
+    return "authentication" in message or "api_key" in message
+
+
 class SupportsMessages(Protocol):
     """The slice of `anthropic.Anthropic` this module actually uses."""
 
@@ -89,12 +105,22 @@ def _create(client: SupportsMessages, **kwargs: Any) -> Any:
             return client.beta.messages.create(  # type: ignore[attr-defined]
                 betas=[_FALLBACK_BETA], fallbacks="default", **kwargs
             )
-        except (TypeError, AttributeError, anthropic.BadRequestError):
+        except (TypeError, AttributeError, anthropic.BadRequestError) as exc:
+            # A missing credential also surfaces as TypeError here. Treating it
+            # as "the beta is unsupported" would disable refusal fallbacks for
+            # the life of the process over an unrelated deployment problem.
+            if _is_missing_credential(exc):
+                raise LLMConfigurationError(_MISSING_CREDENTIAL_HINT) from exc
             # SDK too old to type `fallbacks`, or the beta is unavailable on this
             # key. Degrade to the plain endpoint and stop trying.
             _fallback_available = False
 
-    return client.messages.create(**kwargs)
+    try:
+        return client.messages.create(**kwargs)
+    except TypeError as exc:
+        if _is_missing_credential(exc):
+            raise LLMConfigurationError(_MISSING_CREDENTIAL_HINT) from exc
+        raise
 
 
 def complete(
