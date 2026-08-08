@@ -15,3 +15,6 @@ venv/
 .DS_Store
 .idea/
 .vscode/
+
+# Local UI-verification scratch: node_modules, screenshots, throwaway drivers.
+.uiscratch/

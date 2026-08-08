@@ -1,0 +1,33 @@
+# Render Blueprint. Deploy with: New > Blueprint > point at this repo.
+#
+# Sessions live in the application process (app/session_store.py), so this must
+# stay a single instance. Adding replicas would route a candidate's second turn
+# to a process that has never seen their first one, and every answer after the
+# opening question would 404.
+services:
+  - type: web
+    name: eternityx-interview-agent
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # $PORT is injected by Render; binding 0.0.0.0 is required to accept traffic.
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # The chat UI is served at /, so this doubles as the demo URL health check.
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      # sync: false keeps the key out of the blueprint -- set it in the Render
+      # dashboard under Environment. The startup banner reports whether it
+      # resolved, so a missing key is visible in the deploy log rather than
+      # surfacing as a 503 on the first question.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # The key above is an AgentRouter key. Without this the SDK would send it
+      # to api.anthropic.com and every call would fail authentication.
+      - key: ANTHROPIC_BASE_URL
+        value: https://agentrouter.org
+      # Must be a model the endpoint above serves, or the first question 503s.
+      - key: LLM_MODEL
+        value: claude-opus-5
