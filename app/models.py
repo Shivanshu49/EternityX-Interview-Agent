@@ -28,10 +28,14 @@ class InterviewRequest(BaseModel):
 class QuestionResult(BaseModel):
     """Contract returned by the question engine."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow", from_attributes=True)
 
     reply: str = Field(min_length=1)
     day: int = Field(ge=1, le=31)
+    tier: str | None = None
+    pattern: str | None = None
+    reason: str | None = None
+    is_follow_up: bool | None = None
 
 
 class Feedback(BaseModel):
