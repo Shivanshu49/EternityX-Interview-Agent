@@ -7,6 +7,7 @@ hands it here, so the engine stays testable: pass any object exposing
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Protocol
 
@@ -41,6 +42,13 @@ _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # Flipped off permanently the first time the installed SDK or the API rejects
 # the fallback parameter, so we retry the beta path at most once per process.
 _fallback_available = True
+
+
+# The end-of-interview report is one call at the end of a session, so latency
+# matters far less than it does per question -- more room to reason, more room
+# to write four sections of prose.
+FEEDBACK_EFFORT = "medium"
+FEEDBACK_MAX_TOKENS = 6000
 
 
 class LLMError(RuntimeError):
@@ -127,3 +135,51 @@ def complete(
             "Response hit max_tokens and is truncated -- raise DEFAULT_MAX_TOKENS."
         )
     return text
+
+
+def complete_json(
+    payload: dict[str, Any],
+    schema: dict[str, Any],
+    *,
+    client: SupportsMessages | None = None,
+    model: str = DEFAULT_MODEL,
+    max_tokens: int = FEEDBACK_MAX_TOKENS,
+    effort: str = FEEDBACK_EFFORT,
+) -> dict[str, Any]:
+    """Run one completion constrained to `schema` and return the parsed object.
+
+    Uses structured outputs, so the response is guaranteed to validate against
+    the schema rather than merely being asked to. Pass
+    `SomeModel.model_json_schema()` -- pydantic emits the `additionalProperties`
+    and `required` keys the API needs.
+    """
+    message = _create(
+        client or get_client(),
+        model=model,
+        max_tokens=max_tokens,
+        output_config={
+            "effort": effort,
+            "format": {"type": "json_schema", "schema": schema},
+        },
+        **payload,
+    )
+
+    stop_reason = getattr(message, "stop_reason", None)
+    if stop_reason == "refusal":
+        raise LLMRefusal(f"Request declined by safety classifiers ({model}).")
+    if stop_reason == "max_tokens":
+        raise LLMError(
+            "Structured response hit max_tokens and is truncated -- raise "
+            "FEEDBACK_MAX_TOKENS."
+        )
+
+    text = "".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    ).strip()
+    if not text:
+        raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LLMError("Structured output was not valid JSON.") from exc

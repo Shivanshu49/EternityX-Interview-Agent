@@ -137,7 +137,7 @@ class NextQuestion(BaseModel):
 # --------------------------------------------------------------------------
 
 
-def _priority(mission: Mission | None) -> Priority:
+def priority_for(mission: Mission | None) -> Priority:
     """Rank one day by how much a question about it would teach us.
 
     Tiers mirror `signals.classify()` but are not the same axis: classify says
@@ -192,7 +192,7 @@ def _sort_key(day: int, mission: Mission | None) -> tuple[int, int, int, int]:
     plan and a reviewer can replay the decision.
     """
     return (
-        int(_priority(mission)),
+        int(priority_for(mission)),
         -(mission.attempts if mission else 0),
         0 if day in HIGH_VALUE_DAYS else 1,
         day,
@@ -245,7 +245,7 @@ def pick_next_day(
 
     day = min(pool, key=lambda d: _sort_key(d, candidate.mission_for(d)))
     mission = candidate.mission_for(day)
-    priority = _priority(mission)
+    priority = priority_for(mission)
 
     reason = _reason(day, mission, priority)
     if forced:
@@ -488,7 +488,7 @@ def resolve_target(
                 mode=QuestionMode.FOLLOW_UP,
                 move=_follow_up_move(last),
                 reason=f"Last answer on day {last.day} was too thin to score.",
-                tier=_priority(mission).name,
+                tier=priority_for(mission).name,
                 pattern=classify(mission).value,
             )
 

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EternityX Interview Agent</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #fff; --ink: #1a1a18; --muted: #6b6b66;
+    --line: #e3e3de; --accent: #2f5d50; --accent-ink: #fff;
+    --them: #eef1f0; --me: #2f5d50; --warn: #8a2f2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --panel: #1e1e23; --ink: #ececea; --muted: #9a9a95;
+      --line: #32323a; --accent: #6fae9b; --accent-ink: #14201c;
+      --them: #26262d; --me: #2f5d50; --warn: #e0888a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; height: 100dvh;
+  }
+  header {
+    padding: .75rem 1rem; border-bottom: 1px solid var(--line);
+    display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
+  }
+  header h1 { font-size: 1rem; margin: 0; font-weight: 650; }
+  header .sid { color: var(--muted); font: 12px ui-monospace, monospace; }
+  header .spacer { flex: 1; }
+  button {
+    font: inherit; padding: .45rem .9rem; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  main { flex: 1; overflow-y: auto; padding: 1rem; }
+  .wrap { max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column; gap: .75rem; }
+  .msg { padding: .65rem .9rem; border-radius: 10px; max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.them { background: var(--them); align-self: flex-start; }
+  .msg.me { background: var(--me); color: #fff; align-self: flex-end; }
+  .msg.sys { background: transparent; color: var(--muted); align-self: center; font-size: .85rem; text-align: center; max-width: 100%; }
+  .msg.err { background: transparent; color: var(--warn); align-self: center; font-size: .9rem; max-width: 100%; }
+  .who { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .2rem; }
+  .msg.me .who { color: #cfe0da; }
+  footer { border-top: 1px solid var(--line); padding: .75rem 1rem; background: var(--panel); }
+  .composer { max-width: 46rem; margin: 0 auto; display: flex; gap: .5rem; }
+  textarea {
+    flex: 1; resize: none; font: inherit; padding: .55rem .7rem; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); min-height: 2.6rem; max-height: 9rem;
+  }
+  details { max-width: 46rem; margin: 0 auto 1rem; }
+  summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+  details textarea { width: 100%; min-height: 11rem; font: 12px ui-monospace, monospace; margin-top: .5rem; }
+  .report { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; align-self: stretch; max-width: 100%; }
+  .report h2 { margin: 0 0 .5rem; font-size: .95rem; }
+  .report h3 { margin: 1rem 0 .3rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .report ul { margin: 0; padding-left: 1.2rem; }
+  .report li { margin-bottom: .3rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>EternityX Interview Agent</h1>
+  <span class="sid" id="sid"></span>
+  <span class="spacer"></span>
+  <button id="restart">New interview</button>
+</header>
+
+<main>
+  <div class="wrap">
+    <details id="setup" open>
+      <summary>Candidate payload (edit before starting)</summary>
+      <textarea id="candidate" spellcheck="false"></textarea>
+      <p><button class="primary" id="start">Start interview</button></p>
+    </details>
+    <div id="log"></div>
+  </div>
+</main>
+
+<footer>
+  <form class="composer" id="composer">
+    <textarea id="input" placeholder="Answer the interviewer…" disabled></textarea>
+    <button class="primary" id="send" disabled>Send</button>
+  </form>
+</footer>
+
+<script>
+const API = "/api/interview";
+
+const SAMPLE = {
+  member: { id: "CAND-001", name: "Priya", jobRole: "AI Engineer", yearsExperience: 2 },
+  missions: [
+    { day: 7,  title: "Embeddings Explained", passed: true,  attempts: 2 },
+    { day: 9,  title: "Building & Populating the Vector Database", passed: true, attempts: 1 },
+    { day: 13, title: "Advanced Prompting: Function Calling & Structured Outputs", passed: true, attempts: 5 },
+    { day: 15, title: "Fine-Tuning: Hands-On with LoRA & QLoRA", skipped: true },
+    { day: 23, title: "Model Context Protocol (MCP)", passed: true, attempts: 1 },
+    { day: 26, title: "Performance Optimization & Cost Management", passed: false, attempts: 4 },
+    { day: 27, title: "Security, Privacy & Guardrails", skipped: true }
+  ],
+  signals: { commitDays: 26, missionsCompleted: 24, missionsFirstTry: 11 }
+};
+
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("input"), send = $("send");
+let sessionId = null, busy = false, done = false;
+
+$("candidate").value = JSON.stringify(SAMPLE, null, 2);
+
+function newSessionId() {
+  sessionId = (crypto.randomUUID?.() ?? String(Date.now())).slice(0, 18);
+  $("sid").textContent = sessionId;
+}
+newSessionId();
+
+function bubble(cls, who, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  if (who) {
+    const w = document.createElement("div");
+    w.className = "who"; w.textContent = who;
+    el.appendChild(w);
+  }
+  el.appendChild(document.createTextNode(text));
+  log.appendChild(el);
+  el.scrollIntoView({ block: "end" });
+  return el;
+}
+
+function renderFeedback(fb) {
+  const box = document.createElement("div");
+  box.className = "report";
+  const h = document.createElement("h2");
+  h.textContent = "Interview feedback";
+  box.appendChild(h);
+
+  const p = document.createElement("p");
+  p.textContent = fb.summary ?? "";
+  box.appendChild(p);
+
+  for (const [key, label] of [["strengths", "Strengths"], ["gaps", "Gaps"], ["next", "Next steps"]]) {
+    if (!Array.isArray(fb[key]) || !fb[key].length) continue;
+    const h3 = document.createElement("h3");
+    h3.textContent = label;
+    box.appendChild(h3);
+    const ul = document.createElement("ul");
+    for (const item of fb[key]) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      ul.appendChild(li);
+    }
+    box.appendChild(ul);
+  }
+  log.appendChild(box);
+  box.scrollIntoView({ block: "end" });
+}
+
+function setBusy(state) {
+  busy = state;
+  const locked = state || done || !sessionStarted();
+  input.disabled = locked;
+  send.disabled = locked;
+  if (!locked) input.focus();
+}
+function sessionStarted() { return $("setup").dataset.started === "1"; }
+
+async function post(body) {
+  const res = await fetch(API, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId, ...body })
+  });
+  let data = null;
+  try { data = await res.json(); } catch { /* non-JSON error body */ }
+  if (!res.ok) {
+    const detail = data?.detail;
+    throw new Error(typeof detail === "string" ? detail : `${res.status} ${res.statusText}`);
+  }
+  return data;
+}
+
+async function exchange(body, thinkingNote) {
+  setBusy(true);
+  const pending = bubble("sys", "", thinkingNote);
+  try {
+    const data = await post(body);
+    pending.remove();
+    if (data.reply) bubble("them", "Interviewer", data.reply);
+    if (data.done) {
+      done = true;
+      if (data.feedback) renderFeedback(data.feedback);
+      bubble("sys", "", "Interview complete.");
+    }
+  } catch (err) {
+    pending.remove();
+    bubble("err", "", err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+$("start").addEventListener("click", async () => {
+  let candidate;
+  try {
+    candidate = JSON.parse($("candidate").value);
+  } catch (err) {
+    bubble("err", "", "Candidate JSON is not valid: " + err.message);
+    return;
+  }
+  $("setup").dataset.started = "1";
+  $("setup").open = false;
+  $("start").disabled = true;
+  await exchange({ candidate }, "Starting interview…");
+});
+
+$("composer").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = input.value.trim();
+  if (!message || busy || done) return;
+  bubble("me", "You", message);
+  input.value = "";
+  await exchange({ message }, "Thinking…");
+});
+
+input.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    $("composer").requestSubmit();
+  }
+});
+
+$("restart").addEventListener("click", () => {
+  log.replaceChildren();
+  done = false;
+  newSessionId();
+  delete $("setup").dataset.started;
+  $("setup").open = true;
+  $("start").disabled = false;
+  setBusy(false);
+});
+
+setBusy(false);
+</script>
+</body>
+</html>

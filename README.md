@@ -19,18 +19,27 @@ candidate actually struggled with and probes *there*:
 
 ```
 app/
-  main.py            FastAPI entrypoint            (B)
-  routes.py          HTTP API surface              (B)
-  question_engine.py Adaptive question selection   (A)
-  prompts.py         Prompt templates              (A)
-  signals.py         Learning-signal scoring       (A)
-  models.py          Shared Pydantic contracts     (A/B)
-  llm.py             LLM client wrapper            (A)
-  report.py          Structured final report       (B)
-frontend/            Interview UI                  (C)
-tests/               Test suite
-data/                Sample signal fixtures
+  main.py             FastAPI entrypoint + static mount   (B)
+  routes.py           HTTP API surface                    (B)
+  session_store.py    In-process session state            (B)
+  curriculum.py       Loads curriculum.json at startup    (B)
+  question_engine.py  Adaptive question selection         (A)
+  feedback_engine.py  Post-interview assessment           (A)
+  prompts.py          Prompt templates                    (A)
+  signals.py          Learning-signal scoring             (A)
+  models.py           Shared Pydantic contracts           (A/B)
+  llm.py              LLM client wrapper                  (A)
+  report.py           Seam from routes to feedback_engine (A/B)
+frontend/index.html   Chat UI, served at /                (C)
+scripts/              Offline sanity + curriculum checks
+tests/                Test suite (111)
+curriculum.json       The real 31-day cohort syllabus
 ```
+
+Both engines grade on one axis. `signals.classify()` turns a mission record into
+a `SignalPattern`, `question_engine.priority_for()` turns that into a selection
+tier, and `feedback_engine` reports against those same labels -- there is no
+second scoring system.
 
 ## Setup
 
