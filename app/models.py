@@ -1,8 +1,327 @@
-"""Shared Pydantic schemas for the interview API and engine boundaries."""
+"""Shared Pydantic schemas.
+
+These types are the contract between the question engine (A), the FastAPI
+layer (B), and the frontend (C). Anything crossing a module boundary is
+defined here so no one has to guess at a dict's shape.
+
+The cohort is modelled the way the data actually arrives: 31 numbered days, each
+with one mission the candidate either passed, ground through, or skipped. There
+is deliberately no second, topic-shaped view of the same facts -- one shape, one
+classifier, one selection path.
+"""
+
+from __future__ import annotations
+
+import json
+from enum import Enum
+from pathlib import Path
 
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# --------------------------------------------------------------------------
+# Inputs: the curriculum
+# --------------------------------------------------------------------------
+
+
+class CurriculumDay(BaseModel):
+    """One day of the cohort, as defined in `curriculum.json`."""
+
+    day: int = Field(ge=1, description="1-based day number")
+    title: str
+    type: str = Field("", description="e.g. 'concept', 'build', 'lab'")
+    tools: list[str] = Field(default_factory=list)
+    objectives: list[str] = Field(
+        default_factory=list, description="What the candidate should be able to do"
+    )
+
+
+class CurriculumModule(BaseModel):
+    """One of the cohort's 8 modules -- a named span of consecutive days."""
+
+    n: int
+    title: str
+    days: list[int] = Field(
+        default_factory=list,
+        description="Inclusive [first_day, last_day] range, not a member list",
+    )
+
+    @property
+    def day_range(self) -> frozenset[int]:
+        """Expand [first, last] into the actual day numbers it covers."""
+        if len(self.days) != 2:
+            return frozenset(self.days)
+        first, last = self.days
+        return frozenset(range(first, last + 1))
+
+
+class Curriculum(BaseModel):
+    """The full 31-day syllabus, indexed by day number."""
+
+    days: list[CurriculumDay] = Field(default_factory=list)
+    cohort: str = Field("", description="Free-text label from the source file")
+    modules: list[CurriculumModule] = Field(
+        default_factory=list,
+        description="Module grouping. Not used for selection, but it is where the "
+        "flagship day bands come from -- see question_engine.FLAGSHIP_DAYS.",
+    )
+
+    @classmethod
+    def load(cls, path: str | Path) -> Curriculum:
+        """Read curriculum.json.
+
+        Accepts either a bare list of days or `{"days": [...]}` so the file can
+        be reshaped later without breaking callers.
+        """
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(days=raw) if isinstance(raw, list) else cls.model_validate(raw)
+
+    def get(self, day: int) -> CurriculumDay | None:
+        return next((d for d in self.days if d.day == day), None)
+
+    def day_numbers(self) -> list[int]:
+        return sorted(d.day for d in self.days)
+
+    def module_for(self, day: int) -> CurriculumModule | None:
+        """Which module a day belongs to, if the file declares modules."""
+        return next((m for m in self.modules if day in m.day_range), None)
+
+    def module_named(self, fragment: str) -> CurriculumModule | None:
+        """First module whose title contains `fragment`, case-insensitively."""
+        needle = fragment.lower()
+        return next((m for m in self.modules if needle in m.title.lower()), None)
+
+    def tool_vocabulary(self) -> frozenset[str]:
+        """Every tool named anywhere in the syllabus, lowercased.
+
+        Used as the concreteness dictionary when judging answer depth: naming a
+        real tool counts as being specific even if it belongs to another day.
+        """
+        return frozenset(t.lower() for d in self.days for t in d.tools if t)
+
+    def __len__(self) -> int:
+        return len(self.days)
+
+
+# --------------------------------------------------------------------------
+# Inputs: the candidate's cohort record
+# --------------------------------------------------------------------------
+
+
+class Mission(BaseModel):
+    """The candidate's outcome on one day's mission."""
+
+    day: int = Field(ge=1)
+    title: str = ""
+    passed: bool = False
+    attempts: int = Field(0, ge=0, description="Submissions made; 0 if never attempted")
+    skipped: bool = False
+
+    @property
+    def has_record(self) -> bool:
+        """Whether this row says anything at all.
+
+        No attempts, no pass, no explicit skip means the mission was never
+        started -- which is absence of data, not evidence of a gap, and the
+        classifier and the ranker both need to treat it that way.
+        """
+        return self.skipped or self.passed or self.attempts > 0
+
+
+class CohortSignals(BaseModel):
+    """Cohort-wide totals. Context for the interviewer, not a selection input.
+
+    JSON arrives camelCase; both spellings are accepted so the API layer can
+    hand us the payload untouched.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    commit_days: int = Field(0, ge=0, alias="commitDays")
+    missions_completed: int = Field(0, ge=0, alias="missionsCompleted")
+    missions_first_try: int = Field(0, ge=0, alias="missionsFirstTry")
+
+
+class Member(BaseModel):
+    """Who the candidate is. Shape is owned upstream, so unknown keys pass through."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    name: str | None = None
+    email: str | None = None
+
+
+class Candidate(BaseModel):
+    """One interviewee: who they are, and what they actually did for 31 days."""
+
+    member: Member = Field(default_factory=Member)
+    missions: list[Mission] = Field(default_factory=list)
+    signals: CohortSignals = Field(default_factory=CohortSignals)
+
+    def mission_for(self, day: int) -> Mission | None:
+        return next((m for m in self.missions if m.day == day), None)
+
+    @property
+    def display_name(self) -> str:
+        return self.member.name or self.member.id or "the candidate"
+
+
+# --------------------------------------------------------------------------
+# Derived: what the record says about the candidate
+# --------------------------------------------------------------------------
+
+
+class SignalPattern(str, Enum):
+    """How a candidate behaved on one day. Drives interview strategy."""
+
+    FLUENT = "fluent"          # first-try pass -- genuine command
+    STEADY = "steady"          # passed in a couple of tries -- solid
+    GRINDER = "grinder"        # passed only after many tries -- possibly shallow
+    STRUGGLED = "struggled"    # attempted, never passed -- known gap
+    AVOIDED = "avoided"        # skipped outright -- gap or low confidence
+    UNKNOWN = "unknown"        # never started, or no row at all
+
+
+class DayProfile(BaseModel):
+    """The engine's belief about one day, before and during the interview."""
+
+    day: int
+    title: str = ""
+    pattern: SignalPattern
+    mastery: float = Field(ge=0.0, le=1.0, description="Believed skill level")
+    uncertainty: float = Field(ge=0.0, le=1.0, description="How unsure we are")
+    evidence: str = Field(description="Plain-language reason for this belief")
+    attempts: int = 0
+    passed: bool = False
+    skipped: bool = False
+
+
+# --------------------------------------------------------------------------
+# Interview artifacts
+# --------------------------------------------------------------------------
+
+
+class QuestionKind(str, Enum):
+    """Interview move. Chosen from the day's pattern and current belief."""
+
+    PROBE_DEPTH = "probe_depth"    # they got it right -- do they know *why*?
+    EDGE_CASE = "edge_case"        # push a fluent candidate to the boundary
+    SCAFFOLD = "scaffold"          # start accessible, build confidence
+    DIAGNOSE_GAP = "diagnose_gap"  # find where the understanding breaks
+    APPLY = "apply"                # transfer the idea to a new situation
+    CLARIFY = "clarify"            # last answer was ambiguous -- resolve it
+
+
+class QuestionMode(str, Enum):
+    """Whether the next question opens a new day or digs into the current one."""
+
+    OPENING = "opening"
+    FOLLOW_UP = "follow_up"
+
+
+class UnderstandingLevel(str, Enum):
+    NONE = "none"
+    RECALL = "recall"              # repeats the definition
+    APPLIED = "applied"            # can use it
+    TRANSFERRED = "transferred"    # can adapt it to a new context
+
+
+class AnswerEvaluation(BaseModel):
+    """Structured grading of one answer. Produced by the LLM."""
+
+    score: float = Field(ge=0.0, le=1.0)
+    level: UnderstandingLevel
+    reasoning: str
+    strengths: list[str] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    needs_follow_up: bool = Field(
+        False, description="True when the answer was close but incomplete or ambiguous"
+    )
+
+
+class DayTurn(BaseModel):
+    """One question/answer exchange, anchored to the curriculum day it probed."""
+
+    day: int
+    question: str
+    answer: str = ""
+    follow_up: bool = Field(
+        False, description="True if this probed deeper on the previous turn's day"
+    )
+    evaluation: AnswerEvaluation | None = Field(
+        None, description="Set by the grader, if one has run. Overrides heuristics."
+    )
+
+
+class InterviewSession(BaseModel):
+    """Everything `next_question` needs. Passed in, never held globally."""
+
+    candidate: Candidate
+    turns: list[DayTurn] = Field(default_factory=list)
+    max_questions: int = Field(8, ge=1)
+
+    @property
+    def asked_count(self) -> int:
+        return len(self.turns)
+
+    @property
+    def days_covered(self) -> list[int]:
+        """Distinct days already probed, in the order they were first asked."""
+        seen: list[int] = []
+        for turn in self.turns:
+            if turn.day not in seen:
+                seen.append(turn.day)
+        return seen
+
+    @property
+    def last_turn(self) -> DayTurn | None:
+        return self.turns[-1] if self.turns else None
+
+    def follow_ups_on(self, day: int) -> int:
+        """How many consecutive follow-ups the tail of the interview has spent on `day`."""
+        count = 0
+        for turn in reversed(self.turns):
+            if turn.day != day:
+                break
+            if turn.follow_up:
+                count += 1
+        return count
+
+
+# --------------------------------------------------------------------------
+# Output: the structured report
+# --------------------------------------------------------------------------
+
+
+class DayVerdict(BaseModel):
+    day: int
+    title: str = ""
+    signal_pattern: SignalPattern
+    prior_mastery: float
+    final_mastery: float
+    verdict: str = Field(description="What the interview revealed about this day")
+
+
+class InterviewReport(BaseModel):
+    candidate_id: str
+    candidate_name: str | None = None
+    summary: str
+    day_verdicts: list[DayVerdict] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    growth_areas: list[str] = Field(default_factory=list)
+    recommendation: str
+
+
+# ==========================================================================
+# API boundary (owner B)
+# ==========================================================================
+#
+# The HTTP contract, kept verbatim from B's implementation. `QuestionResult`
+# is the shape `routes._next_question` validates the engine's return value
+# into; `NextQuestion` in question_engine.py is deliberately named to satisfy
+# it attribute-for-attribute via `from_attributes=True`.
 
 
 class InterviewRequest(BaseModel):
@@ -55,3 +374,64 @@ class InterviewResponse(BaseModel):
     reply: str
     done: bool
     feedback: Feedback | None = None
+
+
+# --------------------------------------------------------------------------
+# Adapter: B's dict session -> the engine's typed session
+# --------------------------------------------------------------------------
+#
+# The API layer stores sessions as plain dicts (see `app/session_store.py`) and
+# owns both mutation and the completion gate. The engine works in typed models
+# and mutates nothing. This function is the seam between the two.
+
+# B's `can_finish` ends an interview at >=8 questions AND >=4 distinct days, so
+# the engine must not impose a lower ceiling of its own -- returning None while
+# the API still wants a question would surface as a 502. One question per
+# curriculum day is the natural upper bound.
+DICT_SESSION_MAX_QUESTIONS = 31
+
+
+def turns_from_history(history: list[dict[str, Any]]) -> list[DayTurn]:
+    """Fold B's flat `history` list into question/answer pairs.
+
+    History alternates interviewer and candidate entries. An interviewer entry
+    opens a turn; the next candidate entry closes it. A trailing interviewer
+    entry becomes a turn with an empty answer, which is correct -- the question
+    was asked but not yet answered.
+    """
+    turns: list[DayTurn] = []
+    for entry in history:
+        if entry.get("role") == "interviewer":
+            turns.append(
+                DayTurn(
+                    day=int(entry.get("day", 0) or 0),
+                    question=str(entry.get("content", "")),
+                    follow_up=bool(entry.get("is_follow_up", False)),
+                )
+            )
+        elif entry.get("role") == "candidate" and turns:
+            turns[-1].answer = str(entry.get("content", ""))
+    return [t for t in turns if t.day >= 1]
+
+
+def session_from_dict(session: dict[str, Any]) -> InterviewSession:
+    """Build a typed `InterviewSession` from the API layer's dict."""
+    return InterviewSession(
+        candidate=Candidate.model_validate(session.get("candidate") or {}),
+        turns=turns_from_history(session.get("history") or []),
+        max_questions=int(
+            session.get("max_questions") or DICT_SESSION_MAX_QUESTIONS
+        ),
+    )
+
+
+def coerce_session(session: InterviewSession | dict[str, Any]) -> InterviewSession:
+    """Accept either shape, so the engine works from tests and from the API."""
+    return session if isinstance(session, InterviewSession) else session_from_dict(session)
+
+
+def coerce_curriculum(curriculum: Curriculum | dict[str, Any] | None) -> Curriculum | None:
+    """Accept the typed model or the raw dict `app/curriculum.py` loads."""
+    if curriculum is None or isinstance(curriculum, Curriculum):
+        return curriculum
+    return Curriculum.model_validate(curriculum)

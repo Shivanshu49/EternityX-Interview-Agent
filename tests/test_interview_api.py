@@ -176,7 +176,10 @@ def test_bundled_stubs_can_run_a_complete_interview(client, candidate):
     assert body["done"] is True
     assert set(body["feedback"]) == {"summary", "strengths", "gaps", "next"}
     assert get_session("stub-session")["questions_asked"] == 8
-    assert len(set(get_session("stub-session")["days_covered"])) == 4
+    # `can_finish` gates on >= 4 distinct days. The original `== 4` matched the
+    # placeholder engine, which round-robined a fixed four; the adaptive engine
+    # spreads wider, and covering more days is not a regression.
+    assert len(set(get_session("stub-session")["days_covered"])) >= 4
 
 
 @pytest.mark.parametrize(
