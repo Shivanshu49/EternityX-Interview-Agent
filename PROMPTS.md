@@ -646,3 +646,69 @@ That override was inert while the file was never read, and became real the
 moment it was.
 
 ---
+
+## Entry 015 — Live provider: AgentRouter without impersonation
+**Date:** 2026-08-09
+**Author:** A (Shivanshu)
+**Tool:** Cursor (Opus 5)
+**Stage:** 5 — Validation
+
+### Prompt
+
+> This is the thing which I have to build. Check, analyse the entire project,
+> [decide whether it is] built correct or not, and build across it. I have
+> uploaded the AgentRouter API key, full of credits. I do not have an Anthropic
+> key — is there any alternate option, or can it work with this AgentRouter key?
+> Anything possible, do it.
+
+### Intent
+
+Review the build against the challenge spec, then make it actually run on the
+only credential available.
+
+### Outcome
+
+Review: the spec is met. All eight minimum requirements are implemented, and the
+two hard gates (>= 8 questions, >= 4 distinct days) are enforced server-side and
+tested. No interview logic was changed.
+
+Four defects fixed, all in provider configuration rather than in the agent:
+
+- `ANTHROPIC_BASE_URL` was never set, so an AgentRouter key was being sent to
+  `api.anthropic.com`. This was the entire cause of the `401` in entry 014.
+- `LLM_MODEL` disagreed between `.env` (`claude-opus-5`) and `render.yaml`
+  (`claude-sonnet-5`). AgentRouter serves neither Sonnet nor any 4.5 model —
+  only `claude-opus-5`, `claude-opus-4-8` and `gpt-5.6-sol`. Both now agree on a
+  model the endpoint carries.
+- **AgentRouter accepts `output_config` and silently ignores it.** Verified: a
+  request carrying a `json_schema` format returned `Paris` as prose. Since
+  `complete_json` called `json.loads` on the reply, the report would have failed
+  on every interview — after all eight questions, on the one response the
+  candidate reads. `complete_json` now states the schema in the prompt as well,
+  parses fenced or prose-wrapped replies, and retries once with the fault named.
+- `.env` contained a stray `push` line.
+
+Verified live end-to-end against AgentRouter, both candidate paths: 8 questions,
+>= 4 distinct days, structured report returned. Suite 111 -> 134 tests.
+
+### Notes
+
+**Entry 013's objection no longer holds, and the reason is factual rather than a
+change of mind.** That entry declined AgentRouter because the gateway's entry
+condition appeared to be client-identity spoofing — the proxy it reviewed
+impersonated `codex_cli_rs/0.101.0`. Tested directly: the Anthropic Python SDK's
+own default headers pass the WAF unmodified. `curl` is rejected with
+`unauthorized client detected` and the SDK is not, so what the filter wants is a
+recognised SDK, which this project genuinely is. Nothing impersonates anything;
+the change is one environment variable. The spoofing headers from entry 013 were
+tested and are unnecessary, so they are not in the codebase.
+
+The `output_config` finding is the one worth carrying forward, because it is the
+failure mode a gateway introduces that a key check does not catch: the request
+succeeds, HTTP 200, and the contract is quietly unenforced. Structured output is
+a *request* to any endpoint that is not Anthropic itself. Entry 004 chose
+`effort` and structured outputs on the assumption they were guarantees; on this
+provider both are accepted and dropped. The schema is still sent, so running
+against Anthropic directly loses nothing.
+
+---

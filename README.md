@@ -28,11 +28,11 @@ app/
   prompts.py          Prompt templates                    (A)
   signals.py          Learning-signal scoring             (A)
   models.py           Shared Pydantic contracts           (A/B)
-  llm.py              LLM client wrapper                  (A)
+  llm.py              Provider wrapper + JSON coercion    (A)
   report.py           Seam from routes to feedback_engine (A/B)
 frontend/index.html   Chat UI, served at /                (C)
 scripts/              Offline sanity + curriculum checks
-tests/                Test suite (111)
+tests/                Test suite (134)
 curriculum.json       The real 31-day cohort syllabus
 ```
 
@@ -54,15 +54,42 @@ uvicorn app.main:app --reload
 Open <http://127.0.0.1:8000/> — the chat UI is served by the same app, so that
 URL is the demo.
 
+### Provider
+
+The app speaks the Anthropic Messages API, so it runs against Anthropic directly
+or against any gateway implementing it. This deployment uses **AgentRouter**,
+which needs two variables rather than one:
+
+| Variable | Anthropic directly | AgentRouter |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | your `sk-ant-…` key | your AgentRouter key |
+| `ANTHROPIC_BASE_URL` | unset | `https://agentrouter.org` |
+| `LLM_MODEL` | any Claude model | `claude-opus-5`, `claude-opus-4-8`, or `gpt-5.6-sol` |
+
+Setting the key without the base URL is the failure worth knowing about: the SDK
+sends a gateway key to `api.anthropic.com`, which rejects it. A model the
+endpoint does not carry fails differently — HTTP 503, *no available channel for
+model* — and only on the first question, so it is worth confirming against
+`/v1/models` before changing `LLM_MODEL`.
+
+One capability does **not** carry across providers. Anthropic enforces
+`output_config.format` server-side; AgentRouter accepts the field and drops it,
+so a schema alone does not guarantee JSON. The end-of-interview report therefore
+states its schema in the prompt as well, parses replies that arrive fenced or
+wrapped in prose, and retries once with the fault named — see `complete_json` in
+`app/llm.py` and `tests/test_llm.py`. Without that, an interview runs all eight
+questions and then fails on the report, which is the only response the candidate
+actually reads.
+
 `.env` is read at startup by `load_dotenv()` in `app/main.py`, which runs above
 the `app.*` imports because `app/llm.py` reads the key at import time. An
-exported `ANTHROPIC_API_KEY` still wins over the file. The startup banner states
-what was resolved, so a misconfiguration is visible rather than silent:
+exported variable still wins over the file. The startup banner states what was
+resolved, so a misconfiguration is visible rather than silent:
 
 ```
-[config] endpoint : https://api.anthropic.com (default)
-[config] model    : claude-sonnet-5
-[config] api key  : loaded, 108 chars
+[config] endpoint : https://agentrouter.org
+[config] model    : claude-opus-5
+[config] api key  : loaded, 51 chars
 ```
 
 `api key : MISSING` means the file was not found or the variable is not set.
@@ -71,7 +98,7 @@ The key's length is logged; its value never is.
 Run the tests and the offline checks without a key:
 
 ```bash
-pytest -q                              # 111 tests, no network
+pytest -q                              # 134 tests, no network
 python scripts/sanity_check.py         # day selection against a stub
 python scripts/check_curriculum.py     # curriculum vs the engine's assumptions
 ```
