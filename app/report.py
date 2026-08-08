@@ -1,17 +1,15 @@
-"""Temporary structured post-interview report generator."""
+"""Structured post-interview report.
+
+Thin seam only: `routes.py` calls `generate(session) -> dict`, and this keeps
+that signature stable while the real work lives in `app/feedback_engine.py`.
+"""
 
 from typing import Any
 
+from app.curriculum import CURRICULUM
+from app.feedback_engine import generate_feedback
+
 
 def generate(session: dict[str, Any]) -> dict[str, Any]:
-    """Return spec-compliant placeholder feedback until the real engine lands."""
-
-    return {
-        "summary": (
-            f"Completed {session['questions_asked']} questions across "
-            f"{len(set(session['days_covered']))} curriculum days."
-        ),
-        "strengths": ["Completed the full technical interview."],
-        "gaps": ["Detailed competency scoring is not connected yet."],
-        "next": ["Review the interview transcript and revisit weaker topics."],
-    }
+    """Produce the spec's summary/strengths/gaps/next block for a finished session."""
+    return generate_feedback(session, CURRICULUM).model_dump()

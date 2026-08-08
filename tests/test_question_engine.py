@@ -97,12 +97,12 @@ def test_struggle_outranks_first_try_pass(curriculum):
 
 def test_attempted_but_never_passed_is_a_struggle():
     """Two failed attempts is a known gap even though it is not >2 attempts."""
-    assert qe._priority(Mission(day=4, passed=False, attempts=2)) is qe.Priority.STRUGGLED
+    assert qe.priority_for(Mission(day=4, passed=False, attempts=2)) is qe.Priority.STRUGGLED
 
 
 def test_first_try_pass_only_gets_verified_on_high_value_days():
-    assert qe._priority(Mission(day=9, passed=True, attempts=1)) is qe.Priority.VERIFY
-    assert qe._priority(Mission(day=2, passed=True, attempts=1)) is qe.Priority.ROUTINE
+    assert qe.priority_for(Mission(day=9, passed=True, attempts=1)) is qe.Priority.VERIFY
+    assert qe.priority_for(Mission(day=2, passed=True, attempts=1)) is qe.Priority.ROUTINE
 
 
 def test_within_a_tier_more_attempts_comes_first(curriculum):
@@ -406,7 +406,7 @@ def test_never_started_is_unknown_not_struggled():
     blank = Mission(day=4)
     assert blank.has_record is False
     assert classify(blank) is SignalPattern.UNKNOWN
-    assert qe._priority(blank) is qe.Priority.NO_DATA
+    assert qe.priority_for(blank) is qe.Priority.NO_DATA
 
 
 def test_grinder_threshold_is_shared_with_the_engine():
