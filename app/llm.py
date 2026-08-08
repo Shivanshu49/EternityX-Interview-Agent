@@ -72,6 +72,16 @@ class LLMConfigurationError(LLMError):
     """No usable Anthropic credential. A deployment problem, not a model one."""
 
 
+def describe_endpoint() -> str:
+    """Which host requests will actually go to. Reported at startup.
+
+    The SDK reads ANTHROPIC_BASE_URL itself; this only surfaces the resulting
+    value so a running server never talks to an endpoint nobody expected
+    without saying so in the log.
+    """
+    return os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com (default)"
+
+
 _MISSING_CREDENTIAL_HINT = (
     "No Anthropic credential found. Set ANTHROPIC_API_KEY in the environment "
     "the server runs in (a .env file is not read automatically), then restart."

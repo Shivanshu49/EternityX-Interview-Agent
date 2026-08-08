@@ -542,3 +542,107 @@ API key in entry 011 — because a log that only records successes is not an aud
 trail.
 
 ---
+
+## Entry 013 — Third-party gateway proposal
+**Date:** 2026-08-08
+**Author:** A (Shivanshu)
+**Tool:** Claude Code (Opus 5)
+**Stage:** 5 — Validation
+
+### Prompt
+
+> agentrouter_proxy.py uses AgentRouter as an Anthropic-compatible backend
+> [...] The proxy replaces whatever model the client requested with
+> claude-opus-4-8, sends the API key in both x-api-key and Authorization,
+> forwards all incoming anthropic-* headers, and returns AgentRouter's response
+> without translating its format.
+>
+> Client identity headers configured in proxy_config.json claim the caller is
+> User-Agent: codex_cli_rs/0.101.0, Originator: codex_cli_rs, Version: 0.101.0.
+> These impersonate a particular Codex CLI version. From the code alone, there
+> is no evidence the Codex identity headers are necessary — they may have been
+> added to get around AgentRouter client filtering.
+
+### Intent
+
+Unblock the live run without an Anthropic key by routing through a third-party
+gateway.
+
+### Outcome
+
+- Not implemented. The gateway's entry condition is client-identity spoofing,
+  so wiring the application into it would make that impersonation load-bearing
+  for shipped code.
+- Documented the alternatives instead: organiser-provided credits, free console
+  credit, a teammate's key, or an OpenRouter adapter using credit already paid
+  for on an account that does not require impersonation.
+
+### Notes
+
+Recorded because the decision matters more than the code. Verified against
+OpenRouter's own documentation rather than assumption: it is OpenAI-compatible
+only (`/api/v1/chat/completions`, `Authorization: Bearer`, `response_format`)
+and does not implement `/v1/messages`, `x-api-key`, `output_config.effort`, or
+Anthropic beta headers — so it needs a real adapter, not a base-URL change.
+The project remains fully demonstrable without a live key: the day selection,
+follow-up probing, coverage rule and feedback structure are all genuinely
+exercised, and only the model's sentence is stubbed.
+
+---
+
+## Entry 014 — .env loading, licence, security policy
+**Date:** 2026-08-08
+**Author:** A (Shivanshu)
+**Tool:** Claude Code (Opus 5)
+**Stage:** 6 — Hardening
+
+### Prompt
+
+> Fix the .env loading bug — this is blocking every fresh setup silently.
+>
+> 1. Confirm python-dotenv is in requirements.txt, add it if missing.
+> 2. In app/main.py, at the very top, before any other app imports that might
+>    read environment variables: from dotenv import load_dotenv; load_dotenv()
+> 3. Verify this actually runs before app/llm.py (or wherever ANTHROPIC_API_KEY
+>    is first read) executes — if llm.py reads the key at import time rather
+>    than lazily, load_dotenv() needs to happen before that import, not after.
+> 4. Test it properly: unset any exported ANTHROPIC_API_KEY in the shell, rely
+>    purely on the .env file having the real key, then run uvicorn and confirm
+>    it starts cleanly and a real request succeeds.
+> 5. Update README's setup section if needed.
+>
+> Leave the mypy type-hint nits and ruff import-order warnings alone.
+>
+> Once fixed, confirm: is origin/member-a-engine merged into main yet? If not,
+> do that now too. Make sure the secret key was not revealed, update
+> PROMPTS.md, MIT licence and security, and push to GitHub.
+
+### Intent
+
+Close the silent-setup failure, confirm no secret ever reached the repository,
+and add the licence and security documentation a public repo needs.
+
+### Outcome
+
+- `load_dotenv()` added at the top of `app/main.py`, above the `app.*` imports,
+  because `app/llm.py` resolves the key at import time.
+- Startup banner now reports endpoint, model and whether a key was found —
+  length only, never any part of the value.
+- Verified with the shell variable unset: the server reported the key loaded
+  from `.env` alone. **A successful request could not be confirmed** — the key
+  present returns `401 invalid x-api-key`.
+- `LICENSE` (MIT) and `SECURITY.md` added; README setup section rewritten.
+- Secret scan clean: `.env` in no commit, no key-shaped string in any blob in
+  history.
+
+### Notes
+
+Two findings. The 401 is itself the proof that `.env` loading now works — before
+the fix the SDK raised "could not resolve authentication method" because no key
+reached it at all; a 401 means a key was sent and rejected. Separately, making
+the file live exposed that a stale `LLM_MODEL=claude-opus-5` line in the local
+`.env` silently overrides the `claude-sonnet-5` default chosen in entry 004.
+That override was inert while the file was never read, and became real the
+moment it was.
+
+---

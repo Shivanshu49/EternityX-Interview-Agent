@@ -47,8 +47,40 @@ second scoring system.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env      # add your ANTHROPIC_API_KEY
+cp .env.example .env      # then put a real key in ANTHROPIC_API_KEY
 uvicorn app.main:app --reload
+```
+
+Open <http://127.0.0.1:8000/> — the chat UI is served by the same app, so that
+URL is the demo.
+
+`.env` is read at startup by `load_dotenv()` in `app/main.py`, which runs above
+the `app.*` imports because `app/llm.py` reads the key at import time. An
+exported `ANTHROPIC_API_KEY` still wins over the file. The startup banner states
+what was resolved, so a misconfiguration is visible rather than silent:
+
+```
+[config] endpoint : https://api.anthropic.com (default)
+[config] model    : claude-sonnet-5
+[config] api key  : loaded, 108 chars
+```
+
+`api key : MISSING` means the file was not found or the variable is not set.
+The key's length is logged; its value never is.
+
+Run the tests and the offline checks without a key:
+
+```bash
+pytest -q                              # 111 tests, no network
+python scripts/sanity_check.py         # day selection against a stub
+python scripts/check_curriculum.py     # curriculum vs the engine's assumptions
+```
+
+With a key set, drive a real interview end to end against a running server:
+
+```bash
+python scripts/live_interview.py --strong   # high first-try-pass candidate
+python scripts/live_interview.py --weak     # several skipped missions
 ```
 
 ## Team
@@ -62,3 +94,7 @@ uvicorn app.main:app --reload
 ## Development log
 
 All AI prompts used to build this project are logged in [PROMPTS.md](PROMPTS.md).
+
+## Licence
+
+[MIT](LICENSE). Security policy and secret-handling notes: [SECURITY.md](SECURITY.md).
