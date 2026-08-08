@@ -42,7 +42,7 @@ from app.signals import GRINDER_ATTEMPT_THRESHOLD, classify, opening_move
 # Curriculum bands
 # --------------------------------------------------------------------------
 #
-# Two stretches of the cohort carry most of the hiring signal, so the interview
+# Three stretches of the cohort carry most of the hiring signal, so the interview
 # guarantees at least one of them gets covered even if the candidate's record
 # points elsewhere. They double as the "high-value" set: a first-try pass here is
 # worth verifying, because these are the days where luck and understanding look
@@ -50,8 +50,12 @@ from app.signals import GRINDER_ATTEMPT_THRESHOLD, classify, opening_move
 
 AGENTIC_DAYS = frozenset(range(21, 25))  # Agentic AI / MCP
 VECTOR_DAYS = frozenset(range(7, 11))    # Embeddings / Vector search
-FLAGSHIP_DAYS = AGENTIC_DAYS | VECTOR_DAYS
+RAG_DAYS = frozenset({11})               # RAG End-to-End & LLM API Basics
+FLAGSHIP_DAYS = AGENTIC_DAYS | VECTOR_DAYS | RAG_DAYS
 HIGH_VALUE_DAYS = FLAGSHIP_DAYS
+
+# Human-readable band names, for the audit trail on a forced pick.
+_BAND_NAMES = ((AGENTIC_DAYS, "Agentic AI/MCP"), (RAG_DAYS, "RAG"), (VECTOR_DAYS, "Embeddings/Vector"))
 
 # By the Nth distinct day we probe, one flagship day must be among them.
 COVERAGE_DEADLINE = 4
@@ -185,16 +189,36 @@ def _reason(day: int, mission: Mission | None, priority: Priority) -> str:
             return f"Passed day {day} in {attempts} attempts -- solid, not yet stretched."
 
 
-def _sort_key(day: int, mission: Mission | None) -> tuple[int, int, int, int]:
+def _bands_without_coverage(covered: set[int]) -> frozenset[int]:
+    """Days belonging to a flagship band the interview has not touched yet."""
+    return frozenset().union(
+        *(days for days, _ in _BAND_NAMES if not (days & covered))
+    )
+
+
+def _sort_key(
+    day: int, mission: Mission | None, unseen_bands: frozenset[int] = frozenset()
+) -> tuple[int, int, int, int]:
     """Rank within a tier: more struggle first, then flagship days, then earliest.
+
+    The flagship component prefers a band nothing has been asked about yet.
+    Without that, ties break on day number and the interview clusters in the
+    earliest band -- every candidate got Embeddings/Vector and half never
+    reached Agentic AI/MCP, because day 7 outranks day 21 on number alone.
 
     Fully deterministic, so the same candidate always gets the same interview
     plan and a reviewer can replay the decision.
     """
+    if day in unseen_bands:
+        flagship_rank = 0
+    elif day in HIGH_VALUE_DAYS:
+        flagship_rank = 1
+    else:
+        flagship_rank = 2
     return (
         int(priority_for(mission)),
         -(mission.attempts if mission else 0),
-        0 if day in HIGH_VALUE_DAYS else 1,
+        flagship_rank,
         day,
     )
 
@@ -215,7 +239,7 @@ def pick_next_day(
       (a) skipped missions -- ask them to explain despite skipping
       (b) missions with more than two attempts (or attempted and never passed)
       (c) first-try passes on high-value days -- verify it wasn't luck
-      (d) an override: if no day from 21-24 (Agentic AI/MCP) or 7-10
+      (d) an override: if no day from 21-24 (Agentic AI/MCP), 11 (RAG) or 7-10
           (Embeddings/Vector) has been covered by the 4th pick, the pool is
           restricted to those bands until one is.
 
@@ -243,13 +267,14 @@ def pick_next_day(
         if flagship:
             pool, forced = flagship, True
 
-    day = min(pool, key=lambda d: _sort_key(d, candidate.mission_for(d)))
+    unseen_bands = _bands_without_coverage(covered)
+    day = min(pool, key=lambda d: _sort_key(d, candidate.mission_for(d), unseen_bands))
     mission = candidate.mission_for(day)
     priority = priority_for(mission)
 
     reason = _reason(day, mission, priority)
     if forced:
-        band = "Agentic AI/MCP" if day in AGENTIC_DAYS else "Embeddings/Vector"
+        band = next((name for days, name in _BAND_NAMES if day in days), "flagship")
         reason = f"{reason} Selected now to guarantee {band} coverage."
 
     curriculum_day = curriculum.get(day) if curriculum else None

@@ -24,9 +24,15 @@ from app.models import (
     QuestionMode,
 )
 
-# How many prior exchanges to replay. Enough for the model to hear the thread of
-# the conversation; short enough that the prompt stays cheap and focused.
-DEFAULT_HISTORY_TURNS = 3
+# How many prior exchanges to replay. An interview runs 8 questions plus at most
+# two probes per day, so this covers the whole thing: the model can make callbacks
+# to the opening answers and notice when a late answer contradicts an early one.
+# At 3 -- the previous value -- question 8 could not see answers 1 through 4, and
+# the interviewer's own instruction to acknowledge a shift in position was
+# unfollowable for anything outside the window. The answers are a few sentences
+# each, so replaying all of them is cheap, and the payload is ordered
+# stable-to-volatile (see `build_message_payload`) so the prefix still caches.
+DEFAULT_HISTORY_TURNS = 16
 
 
 class MessagePayload(TypedDict):

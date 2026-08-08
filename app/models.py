@@ -358,14 +358,48 @@ class QuestionResult(BaseModel):
 
 
 class Feedback(BaseModel):
-    """Required structured feedback format."""
+    """Required structured feedback format.
+
+    This schema is handed to the structured-output API, so the constraints and
+    descriptions below steer generation as well as validate the result. Before
+    they were added, `{"summary": "", "strengths": [], "gaps": [], "next": []}`
+    validated cleanly, returned HTTP 200, and rendered as a report card with a
+    heading and nothing underneath it -- a silent failure at the one moment the
+    candidate is actually reading.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    summary: str
-    strengths: list[str]
-    gaps: list[str]
-    next: list[str]
+    summary: str = Field(
+        min_length=1,
+        description=(
+            "Two to four sentences on how the candidate came across overall. "
+            "Ground it in what they actually said, not in their cohort record."
+        ),
+    )
+    strengths: list[str] = Field(
+        min_length=1,
+        description=(
+            "What they demonstrated, each tied to a specific thing they said. "
+            "'Explained why chunk overlap fixes a straddled answer', not "
+            "'strong on retrieval'."
+        ),
+    )
+    gaps: list[str] = Field(
+        min_length=1,
+        description=(
+            "Where their understanding ran out, naming the topic and what was "
+            "missing. If the interview was too short to judge something, say so "
+            "rather than inventing a gap."
+        ),
+    )
+    next: list[str] = Field(
+        min_length=1,
+        description=(
+            "Concrete next actions the candidate can start on, each pointing at "
+            "a specific curriculum day or a specific thing to build or measure."
+        ),
+    )
 
 
 class InterviewResponse(BaseModel):
