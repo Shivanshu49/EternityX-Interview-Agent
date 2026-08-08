@@ -202,6 +202,32 @@ def test_malformed_feedback_raises_rather_than_returning_junk(session):
         fe.generate_feedback(session, CURRICULUM, client=client)
 
 
+def test_report_survives_an_endpoint_that_ignores_the_schema(session):
+    """AgentRouter accepts `output_config` and drops it, so the reply is fenced.
+
+    The deployed provider behaves exactly this way. If this regresses, every
+    interview runs its eight questions and then 502s on the report.
+    """
+
+    class FencedStub:
+        def __init__(self) -> None:
+            self.messages = self
+            self.beta = SimpleNamespace(messages=self)
+
+        def create(self, **kwargs):
+            body = json.dumps(
+                {"summary": "s", "strengths": ["a"], "gaps": ["b"], "next": ["c"]}
+            )
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=f"```json\n{body}\n```")],
+                stop_reason="end_turn",
+            )
+
+    result = fe.generate_feedback(session, CURRICULUM, client=FencedStub())
+    assert isinstance(result, Feedback)
+    assert result.strengths == ["a"]
+
+
 def test_report_generate_returns_a_plain_dict_for_routes(session):
     """routes.py validates report.generate()'s return into Feedback."""
     from app import report

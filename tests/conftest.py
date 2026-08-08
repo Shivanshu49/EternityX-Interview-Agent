@@ -14,8 +14,10 @@ from app.session_store import sessions
 def _stub_json_for(schema: dict) -> str:
     """Build a minimal object satisfying `schema`, so structured calls parse.
 
-    Structured-output requests are guaranteed valid JSON by the API, so a stub
-    that returned prose would be testing a state that cannot happen.
+    This models the well-behaved endpoint: one that honours the schema it was
+    given. The opposite case -- a gateway that ignores `output_config` and
+    answers in prose -- is real and is covered in `tests/test_llm.py`, not here,
+    so these fixtures stay about interview behaviour rather than transport.
     """
     out = {}
     for name, spec in schema.get("properties", {}).items():
