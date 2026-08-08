@@ -29,6 +29,13 @@
     display: flex; gap: .75rem; align-items: center; flex-wrap: wrap;
   }
   header h1 { font-size: 1rem; margin: 0; font-weight: 650; }
+  @media (max-width: 30rem) {
+    header { padding: .6rem .75rem; gap: .5rem; flex-wrap: nowrap; }
+    header h1 { font-size: .9rem; }
+    header .sid { display: none; }
+    main { padding: .75rem; }
+    .msg { max-width: 92%; }
+  }
   header .sid { color: var(--muted); font: 12px ui-monospace, monospace; }
   header .spacer { flex: 1; }
   button {
@@ -38,15 +45,28 @@
   button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   main { flex: 1; overflow-y: auto; padding: 1rem; }
+  /* #log holds the bubbles; align-self only works if it is a flex column. */
+  #log { display: flex; flex-direction: column; gap: .75rem; }
   .wrap { max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column; gap: .75rem; }
   .msg { padding: .65rem .9rem; border-radius: 10px; max-width: 85%; white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg.them { background: var(--them); align-self: flex-start; }
   .msg.me { background: var(--me); color: #fff; align-self: flex-end; }
   .msg.sys { background: transparent; color: var(--muted); align-self: center; font-size: .85rem; text-align: center; max-width: 100%; }
-  .msg.err { background: transparent; color: var(--warn); align-self: center; font-size: .9rem; max-width: 100%; }
+  .msg.pending { animation: pulse 1.7s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: .5 } 50% { opacity: 1 } }
+  @media (prefers-reduced-motion: reduce) { .msg.pending { animation: none } }
+  .msg.err {
+    align-self: center; max-width: 100%; font-size: .9rem; color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  }
   .who { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .2rem; }
   .msg.me .who { color: #cfe0da; }
   footer { border-top: 1px solid var(--line); padding: .75rem 1rem; background: var(--panel); }
+  .finished-bar { display: none; max-width: 46rem; margin: 0 auto; align-items: center;
+              justify-content: space-between; gap: .75rem; color: var(--muted); font-size: .9rem; }
+  body.is-done .composer { display: none; }
+  body.is-done .finished-bar { display: flex; }
   .composer { max-width: 46rem; margin: 0 auto; display: flex; gap: .5rem; }
   textarea {
     flex: 1; resize: none; font: inherit; padding: .55rem .7rem; border-radius: 8px;
@@ -86,6 +106,10 @@
     <textarea id="input" placeholder="Answer the interviewer…" disabled></textarea>
     <button class="primary" id="send" disabled>Send</button>
   </form>
+  <div class="finished-bar">
+    <span>Interview complete — feedback is above.</span>
+    <button class="primary" id="again">Start another</button>
+  </div>
 </footer>
 
 <script>
@@ -107,7 +131,7 @@ const SAMPLE = {
 
 const $ = (id) => document.getElementById(id);
 const log = $("log"), input = $("input"), send = $("send");
-let sessionId = null, busy = false, done = false;
+let sessionId = null, busy = false, done = false, answered = 0;
 
 $("candidate").value = JSON.stringify(SAMPLE, null, 2);
 
@@ -156,7 +180,10 @@ function renderFeedback(fb) {
     box.appendChild(ul);
   }
   log.appendChild(box);
-  box.scrollIntoView({ block: "end" });
+  // "start", not "end": the report is usually taller than the viewport, so
+  // scrolling to its bottom lands the reader in the middle of a bullet list
+  // with the heading and summary already off-screen.
+  box.scrollIntoView({ block: "start" });
 }
 
 function setBusy(state) {
@@ -169,11 +196,17 @@ function setBusy(state) {
 function sessionStarted() { return $("setup").dataset.started === "1"; }
 
 async function post(body) {
-  const res = await fetch(API, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, ...body })
-  });
+  let res;
+  try {
+    res = await fetch(API, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId, ...body })
+    });
+  } catch {
+    // Raw fetch rejections read as "Failed to fetch", which tells the user nothing.
+    throw new Error("Could not reach the server — check that it is still running.");
+  }
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON error body */ }
   if (!res.ok) {
@@ -185,19 +218,26 @@ async function post(body) {
 
 async function exchange(body, thinkingNote) {
   setBusy(true);
-  const pending = bubble("sys", "", thinkingNote);
+  const pending = bubble("sys pending", "", thinkingNote);
   try {
     const data = await post(body);
     pending.remove();
-    if (data.reply) bubble("them", "Interviewer", data.reply);
     if (data.done) {
       done = true;
+      // On the final turn `reply` is a placeholder ("Interview completed.").
+      // The feedback card is the payoff; only fall back to the text if the
+      // server sent no feedback.
       if (data.feedback) renderFeedback(data.feedback);
-      bubble("sys", "", "Interview complete.");
+      else if (data.reply) bubble("them", "Interviewer", data.reply);
+      document.body.classList.add("is-done");
+    } else if (data.reply) {
+      bubble("them", "Interviewer", data.reply);
     }
+    return true;
   } catch (err) {
     pending.remove();
     bubble("err", "", err.message);
+    return false;
   } finally {
     setBusy(false);
   }
@@ -214,16 +254,41 @@ $("start").addEventListener("click", async () => {
   $("setup").dataset.started = "1";
   $("setup").open = false;
   $("start").disabled = true;
-  await exchange({ candidate }, "Starting interview…");
+  const started = await exchange({ candidate }, "Reading the candidate's cohort record…");
+  if (!started) {
+    // The server discards a session whose opening question failed, so there is
+    // nothing to send answers to. Without this rollback the composer unlocks
+    // anyway and every message 404s, with Start greyed out and the payload
+    // panel collapsed -- a dead end whose only exit is "New interview".
+    delete $("setup").dataset.started;
+    $("setup").open = true;
+    $("start").disabled = false;
+    setBusy(false);
+    bubble("sys", "", "Nothing was started. Fix the problem above, then press Start interview again.");
+  }
 });
 
 $("composer").addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = input.value.trim();
   if (!message || busy || done) return;
-  bubble("me", "You", message);
+  const mine = bubble("me", "You", message);
   input.value = "";
-  await exchange({ message }, "Thinking…");
+  // The final turn writes the whole assessment, so it takes noticeably longer
+  // than a question. Say so rather than let the wait read as a hang.
+  const note = answered >= 7
+    ? "Reviewing the full interview and writing your feedback — this one takes a few seconds…"
+    : "Thinking…";
+  answered += 1;
+  const sent = await exchange({ message }, note);
+  if (!sent) {
+    // A failed turn is retryable -- the server works on a copy and only commits
+    // on success -- so hand the answer back instead of making them retype it,
+    // and drop the bubble for a turn that never actually happened.
+    mine.remove();
+    input.value = message;
+    answered -= 1;
+  }
 });
 
 input.addEventListener("keydown", (event) => {
@@ -233,15 +298,20 @@ input.addEventListener("keydown", (event) => {
   }
 });
 
-$("restart").addEventListener("click", () => {
+function restart() {
   log.replaceChildren();
   done = false;
+  answered = 0;
+  document.body.classList.remove("is-done");
   newSessionId();
   delete $("setup").dataset.started;
   $("setup").open = true;
   $("start").disabled = false;
   setBusy(false);
-});
+}
+
+$("restart").addEventListener("click", restart);
+$("again").addEventListener("click", restart);
 
 setBusy(false);
 </script>
