@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import ValidationError
 
 from app import question_engine, report
+from app.curriculum import CURRICULUM
 from app.models import Feedback, InterviewRequest, InterviewResponse, QuestionResult
 from app.session_store import (
     can_finish,
@@ -22,7 +23,7 @@ router = APIRouter()
 
 def _next_question(session: dict[str, Any]) -> QuestionResult:
     try:
-        raw_result = question_engine.next_question(deepcopy(session))
+        raw_result = question_engine.next_question(deepcopy(session), CURRICULUM)
         return QuestionResult.model_validate(raw_result)
     except (ValidationError, TypeError, ValueError, KeyError) as exc:
         raise HTTPException(
@@ -53,8 +54,16 @@ def _generate_feedback(session: dict[str, Any]) -> Feedback:
 
 
 def _record_question(session: dict[str, Any], question: QuestionResult) -> None:
+    metadata = question.model_dump(
+        exclude={"reply", "day"}, exclude_none=True
+    )
     session["history"].append(
-        {"role": "interviewer", "content": question.reply, "day": question.day}
+        {
+            "role": "interviewer",
+            "content": question.reply,
+            "day": question.day,
+            **metadata,
+        }
     )
     session["days_covered"].append(question.day)
     session["questions_asked"] += 1

@@ -1,7 +1,7 @@
 """Temporary deterministic question engine.
 
 Owner A can replace the body with an adaptive/LLM implementation while keeping
-the ``next_question(session) -> {reply, day}`` contract unchanged.
+the ``next_question(session, curriculum, client=None)`` contract unchanged.
 """
 
 from typing import Any
@@ -27,7 +27,11 @@ def _candidate_days(candidate: dict[str, Any]) -> list[int]:
     return days
 
 
-def next_question(session: dict[str, Any]) -> dict[str, Any]:
+def next_question(
+    session: dict[str, Any],
+    curriculum: dict[str, Any],
+    client: Any | None = None,
+) -> dict[str, Any]:
     """Return a runnable placeholder question spanning at least four days."""
 
     days = _candidate_days(session["candidate"])
@@ -38,4 +42,8 @@ def next_question(session: dict[str, Any]) -> dict[str, Any]:
     return {
         "reply": f"{name}, question {index + 1}: explain a key decision from day {day}.",
         "day": day,
+        "tier": "baseline",
+        "pattern": "technical_depth",
+        "reason": "Temporary deterministic question for API integration testing.",
+        "is_follow_up": index > 0,
     }

@@ -5,13 +5,17 @@ from collections.abc import Callable
 import pytest
 
 from app import question_engine, report
+from app.curriculum import CURRICULUM
 from app.session_store import get_session
 
 
 def install_question_schedule(
     monkeypatch: pytest.MonkeyPatch, days: list[int]
 ) -> Callable[[dict], dict]:
-    def fake_next_question(session: dict) -> dict:
+    def fake_next_question(
+        session: dict, curriculum: dict, client=None
+    ) -> dict:
+        assert curriculum is CURRICULUM
         index = session["questions_asked"]
         return {"reply": f"Question {index + 1}", "day": days[index]}
 
@@ -66,6 +70,37 @@ def test_turn_accumulates_role_ordered_history(client, candidate, monkeypatch):
         {"role": "candidate", "content": "Answer 1"},
         {"role": "interviewer", "content": "Question 2", "day": 8},
     ]
+
+
+def test_rich_question_metadata_is_retained_in_history(
+    client, candidate, monkeypatch
+):
+    def rich_question(session, curriculum, client=None):
+        return {
+            "reply": "Explain your retrieval choice.",
+            "day": 10,
+            "tier": "advanced",
+            "pattern": "tradeoff",
+            "reason": "Candidate needed multiple attempts on retrieval.",
+            "is_follow_up": False,
+            "learning_signal": "high_attempts",
+        }
+
+    monkeypatch.setattr(question_engine, "next_question", rich_question)
+
+    response = start(client, candidate)
+
+    assert response.status_code == 200
+    assert get_session("session-1")["history"][0] == {
+        "role": "interviewer",
+        "content": "Explain your retrieval choice.",
+        "day": 10,
+        "tier": "advanced",
+        "pattern": "tradeoff",
+        "reason": "Candidate needed multiple attempts on retrieval.",
+        "is_follow_up": False,
+        "learning_signal": "high_attempts",
+    }
 
 
 def test_seven_questions_cannot_finish_even_with_four_days(
@@ -201,7 +236,7 @@ def test_invalid_question_result_is_502_and_start_is_rolled_back(
     monkeypatch.setattr(
         question_engine,
         "next_question",
-        lambda session: {"reply": "Missing day"},
+        lambda session, curriculum, client=None: {"reply": "Missing day"},
     )
 
     response = start(client, candidate)
@@ -217,7 +252,7 @@ def test_question_failure_does_not_commit_candidate_answer(
     start(client, candidate)
     original_history = list(get_session("session-1")["history"])
 
-    def fail(_session):
+    def fail(_session, _curriculum, client=None):
         raise RuntimeError("provider unavailable")
 
     monkeypatch.setattr(question_engine, "next_question", fail)
