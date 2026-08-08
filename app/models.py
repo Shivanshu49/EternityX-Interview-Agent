@@ -16,7 +16,9 @@ import json
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --------------------------------------------------------------------------
 # Inputs: the curriculum
@@ -24,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CurriculumDay(BaseModel):
-    """One day of the cohort, as defined in `data/curriculum.json`."""
+    """One day of the cohort, as defined in `curriculum.json`."""
 
     day: int = Field(ge=1, description="1-based day number")
     title: str
@@ -310,3 +312,126 @@ class InterviewReport(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     growth_areas: list[str] = Field(default_factory=list)
     recommendation: str
+
+
+# ==========================================================================
+# API boundary (owner B)
+# ==========================================================================
+#
+# The HTTP contract, kept verbatim from B's implementation. `QuestionResult`
+# is the shape `routes._next_question` validates the engine's return value
+# into; `NextQuestion` in question_engine.py is deliberately named to satisfy
+# it attribute-for-attribute via `from_attributes=True`.
+
+
+class InterviewRequest(BaseModel):
+    """Request accepted by the single interview endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: str = Field(alias="sessionId", min_length=1)
+    candidate: dict[str, Any] | None = None
+    message: str | None = None
+
+    @field_validator("session_id", "message")
+    @classmethod
+    def reject_blank_strings(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+
+class QuestionResult(BaseModel):
+    """Contract returned by the question engine."""
+
+    model_config = ConfigDict(extra="allow", from_attributes=True)
+
+    reply: str = Field(min_length=1)
+    day: int = Field(ge=1, le=31)
+    tier: str | None = None
+    pattern: str | None = None
+    reason: str | None = None
+    is_follow_up: bool | None = None
+
+
+class Feedback(BaseModel):
+    """Required structured feedback format."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str
+    strengths: list[str]
+    gaps: list[str]
+    next: list[str]
+
+
+class InterviewResponse(BaseModel):
+    """Successful response from the interview endpoint."""
+
+    reply: str
+    done: bool
+    feedback: Feedback | None = None
+
+
+# --------------------------------------------------------------------------
+# Adapter: B's dict session -> the engine's typed session
+# --------------------------------------------------------------------------
+#
+# The API layer stores sessions as plain dicts (see `app/session_store.py`) and
+# owns both mutation and the completion gate. The engine works in typed models
+# and mutates nothing. This function is the seam between the two.
+
+# B's `can_finish` ends an interview at >=8 questions AND >=4 distinct days, so
+# the engine must not impose a lower ceiling of its own -- returning None while
+# the API still wants a question would surface as a 502. One question per
+# curriculum day is the natural upper bound.
+DICT_SESSION_MAX_QUESTIONS = 31
+
+
+def turns_from_history(history: list[dict[str, Any]]) -> list[DayTurn]:
+    """Fold B's flat `history` list into question/answer pairs.
+
+    History alternates interviewer and candidate entries. An interviewer entry
+    opens a turn; the next candidate entry closes it. A trailing interviewer
+    entry becomes a turn with an empty answer, which is correct -- the question
+    was asked but not yet answered.
+    """
+    turns: list[DayTurn] = []
+    for entry in history:
+        if entry.get("role") == "interviewer":
+            turns.append(
+                DayTurn(
+                    day=int(entry.get("day", 0) or 0),
+                    question=str(entry.get("content", "")),
+                    follow_up=bool(entry.get("is_follow_up", False)),
+                )
+            )
+        elif entry.get("role") == "candidate" and turns:
+            turns[-1].answer = str(entry.get("content", ""))
+    return [t for t in turns if t.day >= 1]
+
+
+def session_from_dict(session: dict[str, Any]) -> InterviewSession:
+    """Build a typed `InterviewSession` from the API layer's dict."""
+    return InterviewSession(
+        candidate=Candidate.model_validate(session.get("candidate") or {}),
+        turns=turns_from_history(session.get("history") or []),
+        max_questions=int(
+            session.get("max_questions") or DICT_SESSION_MAX_QUESTIONS
+        ),
+    )
+
+
+def coerce_session(session: InterviewSession | dict[str, Any]) -> InterviewSession:
+    """Accept either shape, so the engine works from tests and from the API."""
+    return session if isinstance(session, InterviewSession) else session_from_dict(session)
+
+
+def coerce_curriculum(curriculum: Curriculum | dict[str, Any] | None) -> Curriculum | None:
+    """Accept the typed model or the raw dict `app/curriculum.py` loads."""
+    if curriculum is None or isinstance(curriculum, Curriculum):
+        return curriculum
+    return Curriculum.model_validate(curriculum)

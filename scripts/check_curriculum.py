@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import question_engine as qe
 from app.models import Curriculum, CurriculumDay
 
-DEFAULT_PATH = Path(__file__).resolve().parent.parent / "data" / "curriculum.json"
+DEFAULT_PATH = Path(__file__).resolve().parent.parent / "curriculum.json"
 
 # Each flagship constant, the module title it is supposed to track, and the
 # keywords to fall back on when the file declares no modules.

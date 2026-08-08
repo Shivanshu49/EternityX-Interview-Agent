@@ -32,7 +32,7 @@ from app.models import (
     Mission,
 )
 
-CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "data" / "curriculum.json"
+CURRICULUM_PATH = Path(__file__).resolve().parent.parent / "curriculum.json"
 
 
 # --------------------------------------------------------------------------
@@ -248,18 +248,18 @@ def run_interview(candidate: Candidate, curriculum: Curriculum, client, turns: i
 
         print(f"\n{'-' * 72}")
         print(f"Turn {n}  [{question.mode.value}]  day {question.day}, move={question.move.value}")
-        print(f"why: {question.rationale}")
+        print(f"why: {question.reason}")
         print(f"\n  PROMPT BRIEF -- verbatim, exactly what the model receives:")
         for line in prompts.render_day_brief(day_ctx, candidate.mission_for(question.day)).splitlines():
             print(f"  | {line}")
-        print(f"\nQ: {question.text}")
+        print(f"\nQ: {question.reply}")
         print(f"A: {answer}")
 
         # The engine never mutates the session -- the caller appends the turn.
         session.turns.append(
             DayTurn(
                 day=question.day,
-                question=question.text,
+                question=question.reply,
                 answer=answer,
                 follow_up=question.mode.value == "follow_up",
             )

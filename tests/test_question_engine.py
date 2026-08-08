@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import question_engine as qe
+from app.curriculum import CURRICULUM_PATH
 from app.models import (
     AnswerEvaluation,
     Candidate,
@@ -332,7 +333,7 @@ def test_next_question_returns_the_model_text_and_does_not_mutate(curriculum):
 
     question = qe.next_question(session, curriculum, client=StubClient("Why MCP?"))
 
-    assert question.text == "Why MCP?"
+    assert question.reply == "Why MCP?"
     assert question.day == 22
     assert question.mode is QuestionMode.OPENING
     assert session.turns == [], "engine must leave session state to the caller"
@@ -562,6 +563,99 @@ def test_substring_fix_does_not_deflate_a_genuinely_specific_answer(curriculum):
         "queries with a different model than the documents, so scores were garbage "
         "until both used all-MiniLM-L6-v2."
     )
-    vocab = Curriculum.load("data/curriculum.json").tool_vocabulary()
+    vocab = Curriculum.load(CURRICULUM_PATH).tool_vocabulary()
     assert len(answer.split()) < qe.SUBSTANTIAL_WORDS
     assert qe.is_shallow(answer, vocabulary=vocab) is False
+
+
+# --------------------------------------------------------------------------
+# Integration seams with the API layer (owner B)
+# --------------------------------------------------------------------------
+
+
+def test_engine_accepts_the_api_layers_dict_session(curriculum):
+    """routes.py passes a plain dict from session_store, not a typed model."""
+    raw = {
+        "candidate": {
+            "member": {"name": "Test"},
+            "missions": [{"day": 22, "title": "MCP", "skipped": True}],
+            "signals": {"commitDays": 25, "missionsCompleted": 28, "missionsFirstTry": 15},
+        },
+        "history": [],
+        "days_covered": [],
+        "questions_asked": 0,
+        "phase": "questioning",
+    }
+    result = qe.next_question(raw, curriculum, client=StubClient("Why MCP?"))
+    assert result.day == 22
+    assert result.reply == "Why MCP?"
+
+
+def test_engine_accepts_a_raw_dict_curriculum():
+    """app/curriculum.py could hand over either shape; both must work."""
+    raw_curriculum = {"days": [{"day": 22, "title": "MCP", "tools": [], "objectives": []}]}
+    session = session_with(candidate_with(Mission(day=22, skipped=True)))
+    assert qe.next_question(session, raw_curriculum, client=StubClient()).day == 22
+
+
+def test_result_validates_into_the_api_contract(curriculum):
+    """`routes._next_question` does exactly this -- it must not raise."""
+    from app.models import QuestionResult
+
+    session = session_with(candidate_with(Mission(day=22, skipped=True)))
+    result = qe.next_question(session, curriculum, client=StubClient("Q?"))
+    contract = QuestionResult.model_validate(result)
+
+    assert contract.reply == "Q?"
+    assert contract.day == 22
+    assert contract.tier == "SKIPPED"
+    assert contract.pattern == "avoided"
+    assert contract.is_follow_up is False
+    assert contract.reason
+
+
+def test_history_round_trips_through_the_dict_adapter(curriculum):
+    """What routes._record_question writes must read back as the same turns."""
+    from app.models import turns_from_history
+
+    history = [
+        {"role": "interviewer", "content": "Q1", "day": 7, "is_follow_up": False},
+        {"role": "candidate", "content": "A1"},
+        {"role": "interviewer", "content": "Q2", "day": 7, "is_follow_up": True},
+        {"role": "candidate", "content": "A2"},
+    ]
+    turns = turns_from_history(history)
+    assert [(t.day, t.question, t.answer, t.follow_up) for t in turns] == [
+        (7, "Q1", "A1", False),
+        (7, "Q2", "A2", True),
+    ]
+
+
+def test_follow_up_budget_tightens_while_breadth_is_owed():
+    assert qe.follow_up_budget(0) == 1
+    assert qe.follow_up_budget(qe.MIN_DISTINCT_DAYS - 1) == 1
+    assert qe.follow_up_budget(qe.MIN_DISTINCT_DAYS) == qe.MAX_FOLLOW_UPS_PER_DAY
+
+
+def test_probing_never_starves_the_completion_gate(curriculum):
+    """A candidate answering everything in three words must still reach 4 days.
+
+    Regression for the merge: unbounded probing meant 8 questions covered only
+    ~3 distinct days, so `session_store.can_finish` could never fire.
+    """
+    candidate = candidate_with(*(Mission(day=d, skipped=True) for d in range(1, 32)))
+    session = session_with(candidate, max_questions=8)
+
+    for _ in range(8):
+        result = qe.next_question(session, curriculum, client=StubClient("Q?"))
+        assert result is not None
+        session.turns.append(
+            DayTurn(
+                day=result.day,
+                question=result.reply,
+                answer="Not sure.",
+                follow_up=result.is_follow_up,
+            )
+        )
+
+    assert len(set(session.days_covered)) >= qe.MIN_DISTINCT_DAYS

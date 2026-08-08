@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from enum import IntEnum
+from typing import Any
 from functools import lru_cache
 
 from pydantic import BaseModel, Field
@@ -23,6 +24,8 @@ from pydantic import BaseModel, Field
 from app import llm, prompts
 from app.models import (
     Candidate,
+    coerce_curriculum,
+    coerce_session,
     Curriculum,
     CurriculumDay,
     DayTurn,
@@ -61,6 +64,24 @@ STRUGGLE_ATTEMPTS = GRINDER_ATTEMPT_THRESHOLD
 # answers does not burn the whole interview on a single topic.
 MAX_FOLLOW_UPS_PER_DAY = 2
 
+# Distinct days an interview owes before depth is worth more than breadth. This
+# mirrors the API layer's completion gate (`session_store.can_finish`), and the
+# two must not drift: probing is the only thing that competes with coverage, so
+# an engine that ratholes freely can stop the interview ever qualifying to end.
+MIN_DISTINCT_DAYS = 4
+
+
+def follow_up_budget(days_covered: int) -> int:
+    """How many probes one day may take, given how much breadth is still owed.
+
+    While the interview is short of `MIN_DISTINCT_DAYS`, a day gets one probe
+    rather than two. That still lets a thin answer be challenged, but bounds the
+    worst case -- a candidate answering everything in three words -- at two
+    questions per day, so the coverage minimum is always reachable inside the
+    question budget instead of being crowded out by depth.
+    """
+    return 1 if days_covered < MIN_DISTINCT_DAYS else MAX_FOLLOW_UPS_PER_DAY
+
 
 class Priority(IntEnum):
     """Selection tiers, best signal first. Lower sorts earlier.
@@ -91,14 +112,24 @@ class DayPick(BaseModel):
 
 
 class NextQuestion(BaseModel):
-    """One generated interview turn, ready to send to the candidate."""
+    """One generated interview turn, ready to send to the candidate.
+
+    Field names deliberately match `models.QuestionResult` so the API layer can
+    do `QuestionResult.model_validate(result)` straight off this object -- that
+    model sets `from_attributes=True`. `day_title`, `mode`, and `move` are extra
+    detail for the report and are simply not read by the HTTP contract.
+    """
 
     day: int
-    day_title: str
-    mode: QuestionMode
-    move: QuestionKind
-    text: str
-    rationale: str
+    reply: str = Field(description="The question text, as the candidate will see it")
+    tier: str = Field(description="Selection tier, e.g. 'SKIPPED' -- Priority.name")
+    pattern: str = Field(description="SignalPattern value for the day, e.g. 'avoided'")
+    reason: str = Field(description="Why this day, for the audit trail")
+    is_follow_up: bool
+
+    day_title: str = ""
+    mode: QuestionMode = QuestionMode.OPENING
+    move: QuestionKind = QuestionKind.APPLY
 
 
 # --------------------------------------------------------------------------
@@ -421,16 +452,22 @@ class QuestionTarget(BaseModel):
     mode: QuestionMode
     move: QuestionKind
     reason: str
+    tier: str
+    pattern: str
 
 
 def resolve_target(
-    session: InterviewSession, curriculum: Curriculum | None = None
+    session: InterviewSession | dict[str, Any],
+    curriculum: Curriculum | dict[str, Any] | None = None,
 ) -> QuestionTarget | None:
     """Decide the day and the interview move for the next turn.
 
     Split out from `next_question` so the selection logic can be tested without
     an LLM. Returns None when the interview is over.
     """
+    session = coerce_session(session)
+    curriculum = coerce_curriculum(curriculum)
+
     if session.asked_count >= session.max_questions:
         return None
 
@@ -438,17 +475,21 @@ def resolve_target(
     if last is not None and last.answer:
         day_ctx = curriculum.get(last.day) if curriculum else None
         vocab = curriculum.tool_vocabulary() if curriculum else None
+        budget = follow_up_budget(len(session.days_covered))
         if (
             needs_follow_up(last, curriculum_day=day_ctx, vocabulary=vocab)
-            and session.follow_ups_on(last.day) < MAX_FOLLOW_UPS_PER_DAY
+            and session.follow_ups_on(last.day) < budget
         ):
             title = day_ctx.title if day_ctx else f"Day {last.day}"
+            mission = session.candidate.mission_for(last.day)
             return QuestionTarget(
                 day=last.day,
                 title=title,
                 mode=QuestionMode.FOLLOW_UP,
                 move=_follow_up_move(last),
                 reason=f"Last answer on day {last.day} was too thin to score.",
+                tier=_priority(mission).name,
+                pattern=classify(mission).value,
             )
 
     pick = pick_next_day(session.candidate, session.days_covered, curriculum)
@@ -461,12 +502,14 @@ def resolve_target(
         mode=QuestionMode.OPENING,
         move=opening_move(pick.pattern),
         reason=pick.reason,
+        tier=pick.priority.name,
+        pattern=pick.pattern.value,
     )
 
 
 def next_question(
-    session: InterviewSession,
-    curriculum: Curriculum | None = None,
+    session: InterviewSession | dict[str, Any],
+    curriculum: Curriculum | dict[str, Any] | None = None,
     *,
     client: llm.SupportsMessages | None = None,
     model: str = llm.DEFAULT_MODEL,
@@ -484,6 +527,9 @@ def next_question(
     Does not mutate `session` -- the caller appends the resulting `DayTurn` once
     the candidate has answered. Returns None when the interview is complete.
     """
+    session = coerce_session(session)
+    curriculum = coerce_curriculum(curriculum)
+
     target = resolve_target(session, curriculum)
     if target is None:
         return None
@@ -504,9 +550,12 @@ def next_question(
 
     return NextQuestion(
         day=target.day,
+        reply=text,
+        tier=target.tier,
+        pattern=target.pattern,
+        reason=target.reason,
+        is_follow_up=target.mode is QuestionMode.FOLLOW_UP,
         day_title=target.title,
         mode=target.mode,
         move=target.move,
-        text=text,
-        rationale=target.reason,
     )
