@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Protocol
 
 import anthropic
+from dotenv import load_dotenv
+
+# Read .env at import time so a key placed there actually reaches the SDK.
+# Without this the file was decorative: python-dotenv is a declared dependency
+# and .env.example ships, but nothing ever loaded it, so putting a key in .env
+# failed silently with an authentication error. override=False means a real
+# exported environment variable always wins over the file.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
 # Claude Sonnet 5. Adaptive thinking is on by default here (as on the Opus
 # tier), so we never pass a `thinking` param -- we just leave room for it in
