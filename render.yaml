@@ -31,3 +31,7 @@ services:
       # Must be a model the endpoint above serves, or the first question 503s.
       - key: LLM_MODEL
         value: claude-opus-5
+      # The Next.js UI is deployed on a separate origin. There are no cookies or
+      # user authentication, so wildcard CORS is appropriate for this demo API.
+      - key: CORS_ORIGINS
+        value: "*"
