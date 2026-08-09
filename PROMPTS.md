@@ -889,3 +889,27 @@ it.
   deterministic question wording; final feedback also degrades to a
   conservative evidence-based report. Both paths preserve the HTTP contract
   and the 8-question, 4-day completion gate.
+
+## Entry 020: Production frontend API default
+**Date:** 2026-08-09
+**Author:** B (Nirbhay)
+**Tool:** OpenAI Codex (GPT-5.6 sol High)
+**Stage:** 7, Deployment
+
+### Prompt
+
+> Fix the deployed Vercel client reporting that it cannot reach
+> `http://localhost:8000`. Preserve localhost for development, make the Render
+> service the safe production default, and retain `NEXT_PUBLIC_API_URL` as the
+> explicit deployment override.
+
+### Intent
+
+Ensure a missing Vercel environment variable cannot silently compile a browser
+bundle that tries to call the visitor's own machine.
+
+### Outcome
+
+- `next dev` still defaults to the local FastAPI server.
+- Production builds default to the deployed Render backend.
+- An explicit `NEXT_PUBLIC_API_URL` continues to override both defaults.
