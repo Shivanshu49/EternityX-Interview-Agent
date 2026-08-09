@@ -1,6 +1,7 @@
 """HTTP API surface for stateful technical interviews."""
 
 from copy import deepcopy
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
@@ -25,6 +26,7 @@ from app.session_store import (
 
 
 router = APIRouter()
+log = logging.getLogger("uvicorn.error")
 
 
 def _next_question(session: dict[str, Any]) -> QuestionResult:
@@ -37,6 +39,7 @@ def _next_question(session: dict[str, Any]) -> QuestionResult:
             detail="Question engine returned an invalid result.",
         ) from exc
     except Exception as exc:
+        log.exception("Question engine unavailable: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Question engine is temporarily unavailable.",
@@ -53,6 +56,7 @@ def _generate_feedback(session: dict[str, Any]) -> Feedback:
             detail="Feedback engine returned an invalid result.",
         ) from exc
     except Exception as exc:
+        log.exception("Feedback engine unavailable: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Feedback engine is temporarily unavailable.",
