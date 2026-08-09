@@ -400,6 +400,55 @@ def test_explain_can_be_toggled_per_request(client, candidate, monkeypatch):
     assert "trace" not in without
 
 
+# --------------------------------------------------------------------------
+# Adaptive eval: grades are internal state, never API surface
+# --------------------------------------------------------------------------
+
+
+def test_adaptive_eval_changes_nothing_about_the_response_shape(
+    client, candidate, monkeypatch
+):
+    """Requirement: with the flag on, the wire contract is still {reply, done}."""
+    from app import evaluation
+    from app.models import AnswerEvaluation, UnderstandingLevel
+
+    monkeypatch.setattr(evaluation, "ENABLE_ADAPTIVE_EVAL", True)
+
+    grade = AnswerEvaluation(
+        score=0.2,
+        level=UnderstandingLevel.RECALL,
+        reasoning="Recites the definition without using it.",
+        gaps=["No mechanism named."],
+    )
+
+    def fake(session: dict, curriculum: dict, client=None):
+        asked = session["questions_asked"]
+        return question_engine.NextQuestion(
+            day=7 + asked,
+            reply=f"Question {asked + 1}",
+            tier="ROUTINE",
+            pattern="steady",
+            reason="r",
+            is_follow_up=False,
+            last_evaluation=grade if asked > 0 else None,
+        )
+
+    monkeypatch.setattr(question_engine, "next_question", fake)
+
+    assert start(client, candidate).json() == {"reply": "Question 1", "done": False}
+    body = turn(client, 1).json()
+    assert set(body) == {"reply", "done"}, "the grade must not leak onto the wire"
+
+    session = get_session("session-1")
+    answered = [h for h in session["history"] if h["role"] == "candidate"]
+    asked = [h for h in session["history"] if h["role"] == "interviewer"]
+
+    assert answered[0]["evaluation"]["score"] == 0.2, "grade stored on the answer"
+    assert all("evaluation" not in q and "last_evaluation" not in q for q in asked), (
+        "the grade belongs to the answer it judged, not to the next question"
+    )
+
+
 def test_feedback_failure_does_not_commit_final_answer(
     client, candidate, monkeypatch
 ):

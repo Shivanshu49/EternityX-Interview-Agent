@@ -770,3 +770,63 @@ dicts do keep extras) and were dropped on the one path that matters, where the
 engine returns a `NextQuestion`. Both are now declared, with a regression test
 that constructs the real model rather than a dict. The general lesson is that a
 fixture shaped differently from production can hide a whole class of bug.
+
+## Entry 017: Closing the adaptive loop, behind a flag
+**Date:** 2026-08-09
+**Author:** A (Shivanshu)
+**Tool:** Cursor (Opus 5)
+**Stage:** 6, Differentiation
+
+### Prompt
+
+> Close the adaptive loop: wire up AnswerEvaluation, update_belief(), and
+> DayProfile mastery into the actual question_engine flow, replacing the
+> is_shallow() word-count heuristic with real LLM-judged answer evaluation.
+> Critical constraint: do this on a new branch (feat/adaptive-loop), gated
+> behind an ENABLE_ADAPTIVE_EVAL flag defaulting to False. [...] Add tests
+> specifically comparing old heuristic vs new evaluation on the same real
+> answers. Confirm this doesn't change the required API contract at all.
+
+### Intent
+
+Entry 016 recorded that the grading half of the engine was designed and never
+built: `needs_follow_up` has always preferred a grade on the turn, and nothing
+ever produced one. Produce it, persist it, and fold it into beliefs, without
+touching what main runs.
+
+### Outcome
+
+- `app/evaluation.py`: one structured grading call per answered turn, judged
+  against the day's real objectives with the mission record as context. The
+  prompt is explicit that length, keywords and confidence are not
+  understanding. Blank answers and "don't know" grade to zero without a model
+  call. Fail-open by contract: any error at all returns None and the heuristic
+  decides, so a grading outage degrades judgment, never availability.
+- Grades ride back on `NextQuestion.last_evaluation`; the API layer stores
+  them on the answer's own history entry and `turns_from_history` restores
+  them, so beliefs fold over the whole interview rather than only the newest
+  answer.
+- `signals.fold_beliefs` turns priors plus grades into a mastery trajectory.
+  A belief-driven probe fires when a passing-but-middling answer leaves a
+  GRINDER/AVOIDED/UNKNOWN day at mastery < 0.5 with uncertainty >= 0.25; those
+  are exactly the priors whose records say the least. The follow-up directive
+  gets a second wording for this case, because telling the model "that answer
+  was thin" about an answer that held up would make it react to something
+  that did not happen.
+- Comparison tests pin the two failure modes of the old heuristic on the same
+  two answers: 48 confident wrong words with an HNSW name-drop (heuristic
+  moves on, grader probes at 0.15/recall) and 11 precise right words
+  (heuristic probes, grader clears at 0.85/applied).
+- Live flag-on run against the gateway: 8 questions, 4 distinct days, 7 grades
+  stored, 4 grade-driven follow-ups, wire contract still exactly {reply,
+  done}. Median turn latency 14s versus roughly 5s heuristic-only; that cost
+  is why the flag defaults off. Suite 183 -> 207, all green with the flag off.
+
+### Notes
+
+The live transcript shows the grader doing the one thing the heuristic never
+could: scoring canned-but-plausible answers near zero because they did not
+address the question that was asked. The old path would have waved every one
+of them through and the interview would have read as attentive while being
+blind. The flag stays off on main until latency and grade calibration have
+been watched across more runs; flipping it is one environment variable.
