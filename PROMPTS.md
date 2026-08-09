@@ -867,7 +867,7 @@ the interview session protocol.
 > Validate the deployed interview endpoint end to end. Treat a successful HTTP
 > status as insufficient: reject upstream HTML/WAF challenges, keep
 > first-party Anthropic beta features on the first-party API only, and use the
-> stable Messages API for compatible gateways such as AgentRouter.
+> provider-required Claude Code wire image for legacy AgentRouter keys.
 
 ### Intent
 
@@ -877,8 +877,10 @@ it.
 
 ### Outcome
 
-- Custom gateways no longer receive Anthropic-only beta fallback parameters.
+- First-party refusal-fallback parameters are no longer sent to custom gateways.
+- Legacy AgentRouter calls use its required Claude Code-compatible beta URL,
+  headers, content blocks, session metadata, identity, and billing attestation.
 - HTML access-verification responses now fail explicitly instead of entering
   session history as generated questions.
-- Regression tests cover both the compatible gateway request path and the WAF
-  response shape observed in production.
+- Regression tests cover generic gateways, the legacy AgentRouter wire image,
+  and the WAF response shape observed in production.
