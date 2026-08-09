@@ -727,3 +727,55 @@ def next_question(
         move=target.move,
         last_evaluation=last_eval,
     )
+
+
+def fallback_question(
+    session: InterviewSession | dict[str, Any],
+    curriculum: Curriculum | dict[str, Any] | None = None,
+) -> NextQuestion | None:
+    """Build one contextual question without a model call.
+
+    This is an availability path, not a second selection engine: it reuses the
+    same candidate ranking, coverage policy, and follow-up decision as
+    ``next_question``. Only the final wording is deterministic. That keeps a
+    transient provider/WAF outage from breaking a live interview while
+    preserving the 8-question, 4-day behavior and selection audit trail.
+    """
+    typed_session = coerce_session(session)
+    typed_curriculum = coerce_curriculum(curriculum)
+    target = resolve_target(typed_session, typed_curriculum)
+    if target is None:
+        return None
+
+    if target.mode is QuestionMode.FOLLOW_UP and typed_session.last_turn:
+        answer = " ".join(typed_session.last_turn.answer.split())
+        excerpt = answer[:120].rstrip()
+        if len(answer) > 120:
+            excerpt += "..."
+        reply = (
+            f'You said, "{excerpt}". Which concrete failure mode would you '
+            "test first to validate that approach?"
+            if excerpt
+            else "Which concrete example would make your reasoning testable?"
+        )
+    else:
+        day = typed_curriculum.get(target.day) if typed_curriculum else None
+        tool = day.tools[0] if day and day.tools else None
+        tool_phrase = f" using {tool}" if tool else ""
+        reply = (
+            f"What design would you choose for a production {target.title} "
+            f"system{tool_phrase}, including the tradeoff that would drive "
+            "your choice?"
+        )
+
+    return NextQuestion(
+        day=target.day,
+        reply=reply,
+        tier=target.tier,
+        pattern=target.pattern,
+        reason=f"{target.reason} Selection retained during provider fallback.",
+        is_follow_up=target.mode is QuestionMode.FOLLOW_UP,
+        day_title=target.title,
+        mode=target.mode,
+        move=target.move,
+    )

@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import ValidationError
 
-from app import question_engine, report
+from app import llm, question_engine, report
 from app.curriculum import CURRICULUM
 from app.models import (
     Feedback,
@@ -33,6 +33,19 @@ def _next_question(session: dict[str, Any]) -> QuestionResult:
     try:
         raw_result = question_engine.next_question(deepcopy(session), CURRICULUM)
         return QuestionResult.model_validate(raw_result)
+    except llm.LLMError as exc:
+        log.warning("Question provider unavailable; using local fallback: %s", exc)
+        try:
+            raw_result = question_engine.fallback_question(
+                deepcopy(session), CURRICULUM
+            )
+            return QuestionResult.model_validate(raw_result)
+        except Exception as fallback_exc:
+            log.exception("Local question fallback failed: %s", fallback_exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Question engine is temporarily unavailable.",
+            ) from fallback_exc
     except (ValidationError, TypeError, ValueError, KeyError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -50,6 +63,16 @@ def _generate_feedback(session: dict[str, Any]) -> Feedback:
     try:
         raw_feedback = report.generate(deepcopy(session))
         return Feedback.model_validate(raw_feedback)
+    except llm.LLMError as exc:
+        log.warning("Feedback provider unavailable; using local fallback: %s", exc)
+        try:
+            return Feedback.model_validate(report.fallback_generate(deepcopy(session)))
+        except Exception as fallback_exc:
+            log.exception("Local feedback fallback failed: %s", fallback_exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Feedback engine is temporarily unavailable.",
+            ) from fallback_exc
     except (ValidationError, TypeError, ValueError, KeyError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

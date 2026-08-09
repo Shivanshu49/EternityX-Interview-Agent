@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 import pytest
 
-from app import question_engine, report
+from app import llm, question_engine, report
 from app.curriculum import CURRICULUM
 from app.models import QuestionKind, QuestionMode
 from app.session_store import get_session
@@ -267,6 +267,24 @@ def test_question_failure_does_not_commit_candidate_answer(
     assert get_session("session-1")["questions_asked"] == 1
 
 
+def test_model_outage_uses_contextual_question_fallback(
+    client, candidate, monkeypatch
+):
+    def provider_failure(_session, _curriculum, client=None):
+        raise llm.LLMError("gateway challenge")
+
+    monkeypatch.setattr(question_engine, "next_question", provider_failure)
+    response = start(client, candidate, session_id="fallback-session")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["done"] is False
+    assert body["reply"].endswith("?")
+    session = get_session("fallback-session")
+    assert session["questions_asked"] == 1
+    assert session["days_covered"]
+
+
 # --------------------------------------------------------------------------
 # ?explain=1: the engine's reasoning, without disturbing the spec'd contract
 # --------------------------------------------------------------------------
@@ -468,3 +486,24 @@ def test_feedback_failure_does_not_commit_final_answer(
     session = get_session("session-1")
     assert session["phase"] == "questioning"
     assert session["history"] == history_before_final_answer
+
+
+def test_model_outage_uses_structured_feedback_fallback(
+    client, candidate, monkeypatch
+):
+    install_question_schedule(monkeypatch, [7, 7, 8, 8, 10, 10, 12, 12])
+    start(client, candidate, session_id="feedback-fallback")
+    for answer_number in range(1, 8):
+        turn(client, answer_number, session_id="feedback-fallback")
+
+    def provider_failure(_session):
+        raise llm.LLMError("gateway challenge")
+
+    monkeypatch.setattr(report, "generate", provider_failure)
+    response = turn(client, 8, session_id="feedback-fallback")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["done"] is True
+    assert set(body["feedback"]) == {"summary", "strengths", "gaps", "next"}
+    assert all(body["feedback"].values())
