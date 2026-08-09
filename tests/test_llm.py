@@ -139,6 +139,35 @@ def test_structured_completion_accepts_a_gateway_string_response():
     assert llm.complete_json(PAYLOAD, SCHEMA, client=client) == VALID
 
 
+def test_custom_gateway_skips_anthropic_only_beta(monkeypatch):
+    client = ScriptedClient("Gateway question.")
+    beta_calls: list[dict] = []
+
+    class BetaMessages:
+        def create(self, **kwargs):
+            beta_calls.append(kwargs)
+            raise AssertionError("custom gateways must not receive Anthropic beta fields")
+
+    client.beta = SimpleNamespace(messages=BetaMessages())
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://agentrouter.org")
+
+    assert llm.complete(PAYLOAD, client=client) == "Gateway question."
+    assert not beta_calls
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "<!doctype html><title>Access Verification</title>",
+        '<html><meta name="aliyun_waf_aa" content="challenge"></html>',
+    ],
+)
+def test_html_gateway_challenge_is_not_returned_as_a_question(reply):
+    with pytest.raises(llm.LLMError, match="HTML access challenge"):
+        llm.complete(PAYLOAD, client=RawStringClient(reply))
+
+
 # --------------------------------------------------------------------------
 # End-to-end: gateway ignores the schema
 # --------------------------------------------------------------------------

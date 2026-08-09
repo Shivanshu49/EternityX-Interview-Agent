@@ -64,6 +64,19 @@ _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 _fallback_available = True
 
 
+def _uses_first_party_anthropic() -> bool:
+    """Whether Anthropic-only beta features are safe to send.
+
+    Messages-compatible gateways implement the stable endpoint, but they do
+    not necessarily implement Anthropic's beta query route or ``fallbacks``
+    parameter. Sending those fields to AgentRouter currently trips its WAF and
+    returns a CAPTCHA page with HTTP 200, so beta fallback is reserved for the
+    first-party API.
+    """
+    endpoint = os.getenv("ANTHROPIC_BASE_URL", "").strip().rstrip("/").lower()
+    return not endpoint or endpoint == "https://api.anthropic.com"
+
+
 # The end-of-interview report is one call at the end of a session, so latency
 # matters far less than it does per question -- more room to reason, more room
 # to write four sections of prose.
@@ -146,6 +159,18 @@ def _response_text(message: Any) -> str:
     ).strip()
 
 
+def _reject_non_model_response(text: str) -> str:
+    """Reject HTML error/challenge pages returned with a successful status."""
+    prefix = text.lstrip()[:512].lower()
+    if (
+        prefix.startswith("<!doctype html")
+        or prefix.startswith("<html")
+        or "aliyun_waf" in prefix
+    ):
+        raise LLMError("Model gateway returned an HTML access challenge.")
+    return text
+
+
 class LLMError(RuntimeError):
     """The model returned nothing usable."""
 
@@ -207,7 +232,7 @@ def _create(client: SupportsMessages, **kwargs: Any) -> Any:
     """Call the Messages API, preferring the refusal-fallback beta."""
     global _fallback_available
 
-    if ENABLE_REFUSAL_FALLBACK and _fallback_available:
+    if ENABLE_REFUSAL_FALLBACK and _fallback_available and _uses_first_party_anthropic():
         try:
             return client.beta.messages.create(  # type: ignore[attr-defined]
                 betas=[_FALLBACK_BETA], fallbacks="default", **kwargs
@@ -257,7 +282,7 @@ def complete(
     if stop_reason == "refusal":
         raise LLMRefusal(f"Request declined by safety classifiers ({model}).")
 
-    text = _response_text(message)
+    text = _reject_non_model_response(_response_text(message))
 
     if not text:
         raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
@@ -377,7 +402,7 @@ def complete_json(
                 "FEEDBACK_MAX_TOKENS."
             )
 
-        text = _response_text(message)
+        text = _reject_non_model_response(_response_text(message))
         if not text:
             raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
 

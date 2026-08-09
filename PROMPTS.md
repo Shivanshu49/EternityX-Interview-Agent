@@ -855,3 +855,30 @@ the interview session protocol.
 - The hackathon default permits all origins without cookies or credentials.
 - Deployments can restrict access through a comma-separated `CORS_ORIGINS` value.
 - Automated coverage verifies the exact `/api/interview?explain=1` preflight.
+
+## Entry 019: Gateway-safe Anthropic compatibility
+**Date:** 2026-08-09
+**Author:** B (Nirbhay)
+**Tool:** OpenAI Codex (GPT-5.6 sol High)
+**Stage:** 7, Deployment
+
+### Prompt
+
+> Validate the deployed interview endpoint end to end. Treat a successful HTTP
+> status as insufficient: reject upstream HTML/WAF challenges, keep
+> first-party Anthropic beta features on the first-party API only, and use the
+> stable Messages API for compatible gateways such as AgentRouter.
+
+### Intent
+
+Prevent infrastructure error pages from being shown to candidates as interview
+questions while retaining refusal fallback support where Anthropic guarantees
+it.
+
+### Outcome
+
+- Custom gateways no longer receive Anthropic-only beta fallback parameters.
+- HTML access-verification responses now fail explicitly instead of entering
+  session history as generated questions.
+- Regression tests cover both the compatible gateway request path and the WAF
+  response shape observed in production.
