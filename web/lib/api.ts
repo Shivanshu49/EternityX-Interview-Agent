@@ -11,9 +11,12 @@ const DEFAULT_API_BASE =
     ? "https://eternityx-interview-agent.onrender.com"
     : "http://localhost:8000";
 
-export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_BASE
-).replace(/\/+$/, "");
+export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_BASE)
+  .replace(/\/+$/, "")
+  // Accept either a provider host or the full interview endpoint. Vercel was
+  // configured with the latter; without this normalization the request became
+  // /api/interview/api/interview and FastAPI correctly returned 405.
+  .replace(/\/api\/interview$/, "");
 
 export class ApiError extends Error {
   status?: number;
