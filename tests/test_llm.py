@@ -149,11 +149,49 @@ def test_custom_gateway_skips_anthropic_only_beta(monkeypatch):
             raise AssertionError("custom gateways must not receive Anthropic beta fields")
 
     client.beta = SimpleNamespace(messages=BetaMessages())
-    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://agentrouter.org")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://co.agentrouter.org")
 
     assert llm.complete(PAYLOAD, client=client) == "Gateway question."
     assert not beta_calls
     assert len(client.calls) == 1
+
+
+def test_legacy_agentrouter_uses_claude_code_wire_image(monkeypatch):
+    stable_calls: list[dict] = []
+    beta_calls: list[dict] = []
+
+    class StableMessages:
+        def create(self, **kwargs):
+            stable_calls.append(kwargs)
+            raise AssertionError("legacy AgentRouter must use its beta URL")
+
+    class BetaMessages:
+        def create(self, **kwargs):
+            beta_calls.append(kwargs)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="Gateway question.")],
+                stop_reason="end_turn",
+            )
+
+    client = SimpleNamespace(
+        messages=StableMessages(),
+        beta=SimpleNamespace(messages=BetaMessages()),
+        _eternityx_legacy_agentrouter=True,
+    )
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://agentrouter.org")
+
+    assert llm.complete(PAYLOAD, client=client) == "Gateway question."
+    assert not stable_calls
+    assert len(beta_calls) == 1
+    call = beta_calls[0]
+    assert "fallbacks" not in call and "betas" not in call
+    assert call["extra_headers"]["x-app"] == "cli"
+    assert call["extra_headers"]["User-Agent"].startswith("claude-cli/")
+    assert call["system"][0]["text"].startswith("x-anthropic-billing-header:")
+    assert call["system"][1]["text"].startswith("You are a Claude agent")
+    assert call["messages"][0]["content"] == [
+        {"type": "text", "text": "Go."}
+    ]
 
 
 @pytest.mark.parametrize(

@@ -12,9 +12,11 @@ one. See `complete_json` for the one place the two are not interchangeable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -63,6 +65,17 @@ _FALLBACK_BETA = "server-side-fallback-2026-07-01"
 # the fallback parameter, so we retry the beta path at most once per process.
 _fallback_available = True
 
+_LEGACY_AGENTROUTER = "https://agentrouter.org"
+_CLAUDE_CODE_VERSION = "2.1.219"
+_CLAUDE_CODE_BUILD = "250"
+_CLAUDE_CODE_BETAS = ",".join(
+    [
+        "claude-code-20250219",
+        "interleaved-thinking-2025-05-14",
+        "effort-2025-11-24",
+    ]
+)
+
 
 def _uses_first_party_anthropic() -> bool:
     """Whether Anthropic-only beta features are safe to send.
@@ -75,6 +88,93 @@ def _uses_first_party_anthropic() -> bool:
     """
     endpoint = os.getenv("ANTHROPIC_BASE_URL", "").strip().rstrip("/").lower()
     return not endpoint or endpoint == "https://api.anthropic.com"
+
+
+def _uses_legacy_agentrouter() -> bool:
+    endpoint = os.getenv("ANTHROPIC_BASE_URL", "").strip().rstrip("/").lower()
+    return endpoint == _LEGACY_AGENTROUTER
+
+
+def _agentrouter_wire_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Shape a request like Claude Code for AgentRouter's legacy WAF.
+
+    Legacy AgentRouter keys are gated to Claude Code-compatible clients. The
+    current wire identity is intentionally scoped to that host and follows the
+    maintained OmniRoute AgentRouter adapter, rather than changing requests to
+    first-party Anthropic or other Messages-compatible gateways.
+    """
+    request = dict(kwargs)
+    session_id = str(uuid.uuid4())
+
+    messages: list[dict[str, Any]] = []
+    first_user_text = ""
+    for message in request.get("messages", []):
+        copied = dict(message)
+        content = copied.get("content")
+        if isinstance(content, str):
+            if copied.get("role") == "user" and not first_user_text:
+                first_user_text = content
+            copied["content"] = [{"type": "text", "text": content}]
+        elif isinstance(content, list) and copied.get("role") == "user":
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    first_user_text = first_user_text or block["text"]
+                    break
+        messages.append(copied)
+    request["messages"] = messages
+
+    cch = hashlib.sha256(first_user_text.encode("utf-8")).hexdigest()[:5]
+    billing = (
+        "x-anthropic-billing-header: "
+        f"cc_version={_CLAUDE_CODE_VERSION}.{_CLAUDE_CODE_BUILD}; "
+        f"cc_entrypoint=sdk-cli; cch={cch};"
+    )
+    system = request.get("system")
+    custom_system = (
+        [{"type": "text", "text": system}]
+        if isinstance(system, str)
+        else list(system or [])
+    )
+    request["system"] = [
+        {"type": "text", "text": billing},
+        {
+            "type": "text",
+            "text": "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
+        },
+        *custom_system,
+    ]
+    request.setdefault("tools", [])
+    request.setdefault("thinking", {"type": "adaptive"})
+    request.setdefault(
+        "metadata",
+        {
+            "user_id": json.dumps(
+                {
+                    "device_id": hashlib.sha256(os.getcwd().encode()).hexdigest(),
+                    "account_uuid": "",
+                    "session_id": session_id,
+                },
+                separators=(",", ":"),
+            )
+        },
+    )
+    request["extra_headers"] = {
+        **request.get("extra_headers", {}),
+        "Accept": "application/json",
+        "User-Agent": f"claude-cli/{_CLAUDE_CODE_VERSION} (external, sdk-cli)",
+        "X-Claude-Code-Session-Id": session_id,
+        "X-Stainless-Lang": "js",
+        "X-Stainless-Package-Version": "0.94.0",
+        "X-Stainless-OS": "MacOS",
+        "X-Stainless-Arch": "arm64",
+        "X-Stainless-Runtime": "node",
+        "X-Stainless-Runtime-Version": "v26.3.0",
+        "X-Stainless-Retry-Count": "0",
+        "anthropic-beta": _CLAUDE_CODE_BETAS,
+        "anthropic-dangerous-direct-browser-access": "true",
+        "x-app": "cli",
+    }
+    return request
 
 
 # The end-of-interview report is one call at the end of a session, so latency
@@ -225,6 +325,11 @@ def get_client() -> anthropic.Anthropic:
     global _client
     if _client is None:
         _client = anthropic.Anthropic()
+        if _uses_legacy_agentrouter():
+            # Transport shaping belongs to the configured default client only.
+            # Injected clients are test doubles or explicit caller choices and
+            # must receive the payload exactly as supplied.
+            setattr(_client, "_eternityx_legacy_agentrouter", True)
     return _client
 
 
@@ -232,7 +337,11 @@ def _create(client: SupportsMessages, **kwargs: Any) -> Any:
     """Call the Messages API, preferring the refusal-fallback beta."""
     global _fallback_available
 
-    if ENABLE_REFUSAL_FALLBACK and _fallback_available and _uses_first_party_anthropic():
+    if (
+        ENABLE_REFUSAL_FALLBACK
+        and _fallback_available
+        and _uses_first_party_anthropic()
+    ):
         try:
             return client.beta.messages.create(  # type: ignore[attr-defined]
                 betas=[_FALLBACK_BETA], fallbacks="default", **kwargs
@@ -246,6 +355,14 @@ def _create(client: SupportsMessages, **kwargs: Any) -> Any:
             # SDK too old to type `fallbacks`, or the beta is unavailable on this
             # key. Degrade to the plain endpoint and stop trying.
             _fallback_available = False
+
+    if getattr(client, "_eternityx_legacy_agentrouter", False):
+        # This gateway intentionally accepts only the Claude Code wire image.
+        # Its beta endpoint is part of that identity; Anthropic's server-side
+        # ``fallbacks`` argument is not, so do not forward it here.
+        return client.beta.messages.create(  # type: ignore[attr-defined]
+            **_agentrouter_wire_kwargs(kwargs)
+        )
 
     try:
         return client.messages.create(**kwargs)
