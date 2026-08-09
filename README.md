@@ -46,6 +46,30 @@ The chat UI renders it under each question, toggleable in the header. It is a
 query parameter rather than a body field precisely so the request and response
 the specification defines are byte-identical when it is absent.
 
+## Adaptive evaluation (experimental)
+
+By default, "was that answer good enough to move on?" is decided by a
+deterministic heuristic (length plus concrete anchors). With
+`ENABLE_ADAPTIVE_EVAL=1`, each answer is instead graded by the model against
+the day's actual objectives into a structured score and understanding level,
+and that grade drives the decision. The differences that matter:
+
+- A long, confident, wrong answer no longer clears the bar; it gets probed.
+- A short answer that names the exact mechanism no longer wastes a probe.
+- Grades fold into per-day mastery beliefs (`signals.update_belief`), so one
+  passing answer on a day the candidate skipped or ground through can still
+  draw a harder follow-up while the belief stays unresolved.
+
+The flag is off on main deliberately. Grading adds one model call per turn
+(roughly doubling per-question latency), and any grading failure falls back to
+the heuristic rather than failing the turn, so the interview's availability
+never depends on the grader. The wire contract is identical either way; grades
+live only in server-side session state. Drive it live with:
+
+```bash
+ENABLE_ADAPTIVE_EVAL=1 python scripts/live_adaptive.py
+```
+
 ## Coverage
 
 One band per topic the brief names, so an interview walks across the syllabus
@@ -82,7 +106,7 @@ app/
   report.py           Seam from routes to feedback_engine (A/B)
 frontend/index.html   Chat UI, served at /                (C)
 scripts/              Offline sanity + curriculum checks
-tests/                Test suite (183)
+tests/                Test suite (207)
 curriculum.json       The real 31-day cohort syllabus
 ```
 
@@ -148,7 +172,7 @@ The key's length is logged; its value never is.
 Run the tests and the offline checks without a key:
 
 ```bash
-pytest -q                              # 183 tests, no network
+pytest -q                              # 207 tests, no network
 python scripts/sanity_check.py         # day selection against a stub
 python scripts/check_curriculum.py     # curriculum vs the engine's assumptions
 ```
