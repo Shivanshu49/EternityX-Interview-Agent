@@ -21,13 +21,15 @@ from functools import lru_cache
 
 from pydantic import BaseModel, Field
 
-from app import llm, prompts
+from app import evaluation, llm, prompts
 from app.models import (
+    AnswerEvaluation,
     Candidate,
     coerce_curriculum,
     coerce_session,
     Curriculum,
     CurriculumDay,
+    DayProfile,
     DayTurn,
     InterviewSession,
     Mission,
@@ -36,7 +38,14 @@ from app.models import (
     SignalPattern,
     UnderstandingLevel,
 )
-from app.signals import GRINDER_ATTEMPT_THRESHOLD, classify, opening_move
+from app.signals import (
+    GRINDER_ATTEMPT_THRESHOLD,
+    build_profiles,
+    classify,
+    fold_beliefs,
+    opening_move,
+    unknown_profile,
+)
 
 # --------------------------------------------------------------------------
 # Curriculum bands
@@ -157,6 +166,16 @@ class NextQuestion(BaseModel):
     day_title: str = ""
     mode: QuestionMode = QuestionMode.OPENING
     move: QuestionKind = QuestionKind.APPLY
+
+    last_evaluation: AnswerEvaluation | None = Field(
+        None,
+        description=(
+            "Grade produced for the answer that preceded this question, when "
+            "the adaptive-eval path ran. Returned so the API layer can persist "
+            "it onto the candidate's history entry; None whenever no fresh "
+            "grade exists."
+        ),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -488,6 +507,36 @@ def _follow_up_move(turn: DayTurn) -> QuestionKind:
 
 
 # --------------------------------------------------------------------------
+# Belief-driven probing (adaptive-eval path only)
+# --------------------------------------------------------------------------
+
+# A probe fires when both hold after folding the new grade in. Mastery below
+# 0.5 means the belief still says "as likely confused as not"; uncertainty at
+# or above 0.25 means one direct observation has not resolved a doubtful prior.
+# With update_belief's weight of 0.6, one answer leaves uncertainty >= 0.25
+# only for the GRINDER (0.75 -> 0.30), AVOIDED (0.80 -> 0.32) and UNKNOWN
+# (0.90 -> 0.36) priors -- exactly the patterns whose records say the least. A
+# STRUGGLED prior (0.45 -> 0.18) does not qualify: a failed mission plus a
+# graded answer is already two real observations.
+BELIEF_PROBE_MASTERY = 0.5
+BELIEF_PROBE_UNCERTAINTY = 0.25
+
+
+def belief_wants_probe(profile: DayProfile) -> bool:
+    """Stay on this day even though the answer itself passed?
+
+    Catches the case the per-answer check cannot: a middling-but-passing answer
+    (score just over the shallow line) on a day whose record was uninformative.
+    One such answer should not clear a day the candidate ground through or
+    skipped; a second, harder question settles it.
+    """
+    return (
+        profile.mastery < BELIEF_PROBE_MASTERY
+        and profile.uncertainty >= BELIEF_PROBE_UNCERTAINTY
+    )
+
+
+# --------------------------------------------------------------------------
 # Question generation
 # --------------------------------------------------------------------------
 
@@ -502,16 +551,30 @@ class QuestionTarget(BaseModel):
     reason: str
     tier: str
     pattern: str
+    answer_was_thin: bool = Field(
+        True,
+        description=(
+            "Follow-ups only. False when the answer itself passed and the probe "
+            "is belief-driven, so the directive must not call it thin."
+        ),
+    )
 
 
 def resolve_target(
     session: InterviewSession | dict[str, Any],
     curriculum: Curriculum | dict[str, Any] | None = None,
+    *,
+    last_evaluation: AnswerEvaluation | None = None,
 ) -> QuestionTarget | None:
     """Decide the day and the interview move for the next turn.
 
     Split out from `next_question` so the selection logic can be tested without
     an LLM. Returns None when the interview is over.
+
+    `last_evaluation` is a grade for the newest answer, produced by the caller.
+    When present (or already on the turn), the follow-up decision runs on the
+    grade and on the folded belief for that day instead of on the word-count
+    heuristic. When absent, behaviour is exactly the pre-grading engine.
     """
     session = coerce_session(session)
     curriculum = coerce_curriculum(curriculum)
@@ -521,13 +584,45 @@ def resolve_target(
 
     last = session.last_turn
     if last is not None and last.answer:
+        if last_evaluation is not None and last.evaluation is None:
+            # A copy, never the caller's turn: this function mutates nothing.
+            last = last.model_copy(update={"evaluation": last_evaluation})
+
         day_ctx = curriculum.get(last.day) if curriculum else None
         vocab = curriculum.tool_vocabulary() if curriculum else None
         budget = follow_up_budget(len(session.days_covered))
-        if (
-            needs_follow_up(last, curriculum_day=day_ctx, vocabulary=vocab)
-            and session.follow_ups_on(last.day) < budget
-        ):
+
+        follow = needs_follow_up(last, curriculum_day=day_ctx, vocabulary=vocab)
+        reason = f"Last answer on day {last.day} was too thin to score."
+        answer_was_thin = True
+
+        if last.evaluation is not None:
+            grade = last.evaluation
+            beliefs = fold_beliefs(
+                build_profiles(session.candidate, curriculum),
+                [*session.turns[:-1], last],
+            )
+            posterior = beliefs.get(last.day) or unknown_profile(last.day)
+
+            if follow:
+                reason = (
+                    f"Answer on day {last.day} graded {grade.score:.2f} at "
+                    f"{grade.level.value} level -- not settled yet."
+                )
+            elif belief_wants_probe(posterior):
+                # The answer passed on its own terms, but one passing answer on
+                # a day whose record was uninformative leaves the belief where
+                # a coin flip would. Spend one more question here.
+                follow = True
+                answer_was_thin = False
+                reason = (
+                    f"Answer held up ({grade.score:.2f}, {grade.level.value}), "
+                    f"but day {last.day}'s belief is unresolved: mastery "
+                    f"{posterior.mastery:.2f}, uncertainty "
+                    f"{posterior.uncertainty:.2f} after grading."
+                )
+
+        if follow and session.follow_ups_on(last.day) < budget:
             title = day_ctx.title if day_ctx else f"Day {last.day}"
             mission = session.candidate.mission_for(last.day)
             return QuestionTarget(
@@ -535,9 +630,10 @@ def resolve_target(
                 title=title,
                 mode=QuestionMode.FOLLOW_UP,
                 move=_follow_up_move(last),
-                reason=f"Last answer on day {last.day} was too thin to score.",
+                reason=reason,
                 tier=priority_for(mission).name,
                 pattern=classify(mission).value,
+                answer_was_thin=answer_was_thin,
             )
 
     pick = pick_next_day(session.candidate, session.days_covered, curriculum)
@@ -574,11 +670,33 @@ def next_question(
 
     Does not mutate `session` -- the caller appends the resulting `DayTurn` once
     the candidate has answered. Returns None when the interview is complete.
+
+    With ENABLE_ADAPTIVE_EVAL on, the newest answer is graded first and the
+    grade drives the follow-up decision; the grade rides back on
+    `last_evaluation` so the caller can persist it. A grading failure returns
+    None from the grader and the heuristic decides instead -- the interview
+    never stalls on the evaluator.
     """
     session = coerce_session(session)
     curriculum = coerce_curriculum(curriculum)
 
-    target = resolve_target(session, curriculum)
+    last = session.last_turn
+    last_eval: AnswerEvaluation | None = None
+    if (
+        evaluation.ENABLE_ADAPTIVE_EVAL
+        and last is not None
+        and last.answer
+        and last.evaluation is None
+    ):
+        last_eval = evaluation.evaluate_answer(
+            last,
+            curriculum_day=curriculum.get(last.day) if curriculum else None,
+            mission=session.candidate.mission_for(last.day),
+            client=client,
+            model=model,
+        )
+
+    target = resolve_target(session, curriculum, last_evaluation=last_eval)
     if target is None:
         return None
 
@@ -590,6 +708,7 @@ def next_question(
         move=target.move,
         reason=target.reason,
         history_turns=history_turns,
+        answer_was_thin=target.answer_was_thin,
     )
 
     text = llm.complete(
@@ -606,4 +725,5 @@ def next_question(
         day_title=target.title,
         mode=target.mode,
         move=target.move,
+        last_evaluation=last_eval,
     )

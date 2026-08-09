@@ -140,3 +140,41 @@ def update_belief(profile: DayProfile, score: float, weight: float = 0.6) -> Day
             "uncertainty": round(min(1.0, max(0.0, posterior_uncertainty)), 3),
         }
     )
+
+
+def unknown_profile(day: int, title: str = "") -> DayProfile:
+    """The belief for a day the cohort record says nothing about.
+
+    Needed because the interview can ask about such days -- the coverage rule
+    reaches them deliberately -- and a graded answer there still has to land on
+    a prior.
+    """
+    mastery, uncertainty = _PRIORS[SignalPattern.UNKNOWN]
+    return DayProfile(
+        day=day,
+        title=title or f"Day {day}",
+        pattern=SignalPattern.UNKNOWN,
+        mastery=mastery,
+        uncertainty=uncertainty,
+        evidence=evidence(SignalPattern.UNKNOWN, None),
+    )
+
+
+def fold_beliefs(
+    profiles: dict[int, DayProfile], turns: list
+) -> dict[int, DayProfile]:
+    """Fold every graded turn into the priors, in interview order.
+
+    Ungraded turns contribute nothing -- absence of a grade is absence of
+    evidence, exactly like a mission that was never started. The input dict is
+    not mutated; the interview's belief state stays a pure function of the
+    cohort record plus the grades so far.
+    """
+    beliefs = dict(profiles)
+    for turn in turns:
+        evaluation = getattr(turn, "evaluation", None)
+        if evaluation is None:
+            continue
+        prior = beliefs.get(turn.day) or unknown_profile(turn.day)
+        beliefs[turn.day] = update_belief(prior, evaluation.score)
+    return beliefs

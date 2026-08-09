@@ -60,8 +60,10 @@ def _generate_feedback(session: dict[str, Any]) -> Feedback:
 
 
 def _record_question(session: dict[str, Any], question: QuestionResult) -> None:
+    # `last_evaluation` grades the *previous* answer, so it belongs on that
+    # candidate entry (see `_record_grade`), not on this question's metadata.
     metadata = question.model_dump(
-        exclude={"reply", "day"}, exclude_none=True
+        exclude={"reply", "day", "last_evaluation"}, exclude_none=True
     )
     session["history"].append(
         {
@@ -73,6 +75,23 @@ def _record_question(session: dict[str, Any], question: QuestionResult) -> None:
     )
     session["days_covered"].append(question.day)
     session["questions_asked"] += 1
+
+
+def _record_grade(session: dict[str, Any], question: QuestionResult) -> None:
+    """Attach a fresh grade to the answer it judged.
+
+    Called between appending the candidate's message and recording the next
+    question, so `history[-1]` is exactly the answer that was graded. Persisting
+    it is what lets later turns fold a full belief trajectory instead of only
+    ever seeing the newest grade.
+    """
+    if question.last_evaluation is None:
+        return
+    entry = session["history"][-1]
+    if entry.get("role") == "candidate":
+        # mode="json" so the stored grade is plain primitives ("recall", not
+        # UnderstandingLevel.RECALL) -- the history dict should stay dumpable.
+        entry["evaluation"] = question.last_evaluation.model_dump(mode="json")
 
 
 def _trace(session: dict[str, Any], question: QuestionResult) -> QuestionTrace:
@@ -165,6 +184,7 @@ def interview(request: InterviewRequest, explain: bool = False) -> InterviewResp
         )
 
     question = _next_question(working_session)
+    _record_grade(working_session, question)
     _record_question(working_session, question)
     update_session(request.session_id, **working_session)
     return InterviewResponse(

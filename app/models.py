@@ -18,7 +18,7 @@ from pathlib import Path
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 # --------------------------------------------------------------------------
 # Inputs: the curriculum
@@ -238,15 +238,58 @@ class UnderstandingLevel(str, Enum):
 
 
 class AnswerEvaluation(BaseModel):
-    """Structured grading of one answer. Produced by the LLM."""
+    """Structured grading of one answer. Produced by the LLM.
 
-    score: float = Field(ge=0.0, le=1.0)
-    level: UnderstandingLevel
-    reasoning: str
-    strengths: list[str] = Field(default_factory=list)
-    gaps: list[str] = Field(default_factory=list)
+    This schema is handed to the structured-output API the same way `Feedback`
+    is, so the descriptions steer the grader as well as validate its output.
+    `extra="forbid"` puts `additionalProperties: false` in the emitted schema.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "How much real understanding the answer demonstrates. 0.0-0.2: wrong "
+            "or nothing demonstrated. 0.3-0.45: fragments, or recites a "
+            "definition without using it. Around 0.5: partially right but "
+            "incomplete. 0.6-0.75: correct and applied to the situation. 0.85+: "
+            "correct, and adapts the idea or names its limits unprompted. Length, "
+            "keyword density and confidence are not understanding."
+        ),
+    )
+    level: UnderstandingLevel = Field(
+        description=(
+            "none: no relevant understanding shown. recall: repeats facts or "
+            "definitions. applied: uses the concept correctly on the situation "
+            "asked about. transferred: adapts it to new conditions or reasons "
+            "about where it breaks."
+        )
+    )
+    reasoning: str = Field(
+        min_length=1,
+        description=(
+            "One or two sentences citing what the candidate actually said and "
+            "how it does or does not meet the day's objectives."
+        ),
+    )
+    strengths: list[str] = Field(
+        default_factory=list,
+        description="Specific things the answer got right. Empty if none.",
+    )
+    gaps: list[str] = Field(
+        default_factory=list,
+        description="Specific things missing or wrong. Empty if none.",
+    )
     needs_follow_up: bool = Field(
-        False, description="True when the answer was close but incomplete or ambiguous"
+        False,
+        description=(
+            "True when one more pointed question would settle real doubt: the "
+            "answer was ambiguous, or close but incomplete. False when the "
+            "answer is clearly strong or clearly hopeless, where moving on "
+            "teaches more."
+        ),
     )
 
 
@@ -374,6 +417,14 @@ class QuestionResult(BaseModel):
     day_title: str | None = None
     mode: str | None = None
     move: str | None = None
+    last_evaluation: AnswerEvaluation | None = Field(
+        None,
+        description=(
+            "Grade for the answer that preceded this question, when the "
+            "adaptive-eval path produced one. The API layer stores it on the "
+            "candidate's history entry; it never appears in the HTTP response."
+        ),
+    )
 
 
 class Feedback(BaseModel):
@@ -485,6 +536,16 @@ def turns_from_history(history: list[dict[str, Any]]) -> list[DayTurn]:
             )
         elif entry.get("role") == "candidate" and turns:
             turns[-1].answer = str(entry.get("content", ""))
+            # A grade recorded by an earlier turn. Restored so beliefs can be
+            # folded over the whole interview, not just the newest answer.
+            stored = entry.get("evaluation")
+            if stored is not None:
+                try:
+                    turns[-1].evaluation = AnswerEvaluation.model_validate(stored)
+                except ValidationError:
+                    # A malformed stored grade must degrade to "ungraded", not
+                    # take the interview down with it.
+                    pass
     return [t for t in turns if t.day >= 1]
 
 

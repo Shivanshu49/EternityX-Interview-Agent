@@ -275,9 +275,33 @@ def render_history(turns: list[DayTurn], limit: int) -> list[dict[str, Any]]:
     return messages
 
 
-def render_directive(mode: QuestionMode, move: QuestionKind, reason: str) -> str:
-    """The instruction for this specific turn -- what to ask and why."""
+def render_directive(
+    mode: QuestionMode,
+    move: QuestionKind,
+    reason: str,
+    *,
+    answer_was_thin: bool = True,
+) -> str:
+    """The instruction for this specific turn -- what to ask and why.
+
+    `answer_was_thin` distinguishes the two reasons a follow-up happens. The
+    default is the heuristic case (the answer gave too little to judge) and
+    keeps the historical wording exactly. False is the belief-driven case: the
+    answer itself held up, but the day is not settled, so telling the model the
+    answer was thin would make it react to something that did not happen.
+    """
     guidance = MOVE_GUIDANCE.get(move, MOVE_GUIDANCE[QuestionKind.APPLY])
+
+    if mode is QuestionMode.FOLLOW_UP and not answer_was_thin:
+        return (
+            "That answer held up, but this day is not settled yet -- their "
+            "record here leaves real doubt, and one decent answer does not "
+            "clear it. Stay on this same day and push one level deeper: a "
+            "harder scenario, an edge, a why. Do not move on.\n\n"
+            f"{guidance}\n\n"
+            "Build directly on what they just said so it reads as raising the "
+            "bar, not repeating the question. One question."
+        )
 
     if mode is QuestionMode.FOLLOW_UP:
         return (
@@ -313,6 +337,7 @@ def build_message_payload(
     move: QuestionKind,
     reason: str,
     history_turns: int = DEFAULT_HISTORY_TURNS,
+    answer_was_thin: bool = True,
 ) -> MessagePayload:
     """Build the full `client.messages.create` payload for the next question.
 
@@ -332,7 +357,7 @@ def build_message_payload(
     brief = render_day_brief(curriculum_day, mission)
     # The candidate's last answer is already in the replayed history above, so
     # the directive only has to say what to do about it.
-    directive = render_directive(mode, move, reason)
+    directive = render_directive(mode, move, reason, answer_was_thin=answer_was_thin)
     messages.append({"role": "user", "content": f"{brief}\n\n---\n\n{directive}"})
 
     return {"system": SYSTEM_PROMPT, "messages": messages}
