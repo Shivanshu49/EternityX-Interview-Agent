@@ -28,8 +28,9 @@ or copy `.env.example` to `.env.local` and edit it.
 ## Deploy to Vercel
 
 1. Import the repo in Vercel and set **Root Directory** to `web/`.
-2. Optionally add `NEXT_PUBLIC_API_URL` = a different deployed backend URL (no
-   trailing slash). Without it, production uses the project Render API.
+2. Optionally add `NEXT_PUBLIC_API_URL` = a different deployed backend host or
+   full `/api/interview` endpoint. Without it, production uses the project
+   Render API.
 3. Deploy. `NEXT_PUBLIC_*` is baked at build time - redeploy after changing it.
 
 ## Notes

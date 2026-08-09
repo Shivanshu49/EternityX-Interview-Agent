@@ -913,3 +913,5 @@ bundle that tries to call the visitor's own machine.
 - `next dev` still defaults to the local FastAPI server.
 - Production builds default to the deployed Render backend.
 - An explicit `NEXT_PUBLIC_API_URL` continues to override both defaults.
+- The client normalizes an override that already ends in `/api/interview`,
+  preventing the duplicated endpoint path observed in the production browser.
