@@ -16,6 +16,21 @@ def test_the_api_is_not_shadowed_by_the_static_mount(client):
     assert response.status_code == 422, "422 means FastAPI validated it, not a 404 from static"
 
 
+def test_separately_hosted_frontend_can_preflight_the_api(client):
+    response = client.options(
+        "/api/interview?explain=1",
+        headers={
+            "Origin": "https://example.vercel.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
 def test_unknown_paths_still_404(client):
     assert client.get("/definitely-not-a-page").status_code == 404
 

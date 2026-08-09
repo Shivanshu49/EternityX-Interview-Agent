@@ -830,3 +830,28 @@ address the question that was asked. The old path would have waved every one
 of them through and the interview would have read as attentive while being
 blind. The flag stays off on main until latency and grade calibration have
 been watched across more runs; flipping it is one environment variable.
+
+## Entry 018: Cross-origin frontend integration
+**Date:** 2026-08-09
+**Author:** B (Nirbhay)
+**Tool:** OpenAI Codex (GPT-5.6 sol High)
+**Stage:** 7, Deployment
+
+### Prompt
+
+> Allow the separately deployed Next.js frontend to call the FastAPI interview
+> endpoint. Configure CORS at the application boundary, retain the exact API
+> contract, avoid credentialed cross-origin requests, document the deployment
+> setting, and add a regression test for the browser preflight request.
+
+### Intent
+
+Unblock the production frontend without weakening request validation or changing
+the interview session protocol.
+
+### Outcome
+
+- FastAPI accepts POST preflight requests from separately hosted frontends.
+- The hackathon default permits all origins without cookies or credentials.
+- Deployments can restrict access through a comma-separated `CORS_ORIGINS` value.
+- Automated coverage verifies the exact `/api/interview?explain=1` preflight.

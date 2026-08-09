@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from app import llm  # noqa: E402
@@ -41,6 +42,23 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="EternityX Interview Agent", lifespan=lifespan)
+
+# The Next.js frontend is deployed separately from this API. There are no
+# cookies or authenticated user accounts, so wildcard CORS is safe for the
+# hackathon default. Production deployments can narrow it to a comma-separated
+# allowlist, for example: CORS_ORIGINS=https://example.vercel.app
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or ["*"],
+    allow_credentials=False,
+    allow_methods=["POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
 
 # The API is registered first so /api/* keeps priority over the catch-all mount.
 app.include_router(router)
