@@ -884,3 +884,8 @@ it.
   session history as generated questions.
 - Regression tests cover generic gateways, the legacy AgentRouter wire image,
   and the WAF response shape observed in production.
+- If an upstream challenge still blocks a deployment IP, the API retains the
+  engine's candidate-aware day selection and follow-up decision while using
+  deterministic question wording; final feedback also degrades to a
+  conservative evidence-based report. Both paths preserve the HTTP contract
+  and the 8-question, 4-day completion gate.
