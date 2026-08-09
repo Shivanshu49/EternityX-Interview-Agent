@@ -71,6 +71,60 @@ FEEDBACK_EFFORT = "medium"
 FEEDBACK_MAX_TOKENS = 6000
 
 
+# Everything the candidate reads passes through this module, so the house style
+# is enforced here rather than trusted to the prompt. Models reach for em dashes
+# constantly and an instruction not to only mostly works; one that slips into a
+# question is the kind of tell that makes a live interview read as generated.
+# Number ranges keep a hyphen ("days 7-10"); elsewhere a dash is doing the job of
+# a comma, so it becomes one.
+_NUMERIC_RANGE = re.compile(r"(?<=\d)\s*[—–―]\s*(?=\d)")
+_DASH_AFTER_WORD = re.compile(r"(?<=[\w)\]\"'`*])\s*[—–―]\s*")
+_DASH_ANY = re.compile(r"\s*[—–―]\s*")
+
+
+def _dash_replacement(match: re.Match[str]) -> str:
+    """A comma, or a colon where a comma would make a third one in one clause.
+
+    "Good instinct - recall first" wants a comma. But the model also writes
+    "Why does that matter, though - what breaks?", and a comma there produces a
+    splice joining two questions. A period would be worse: it would make two
+    questions out of a turn the prompt requires to contain exactly one.
+    """
+    clause = re.split(r"[.!?]", match.string[: match.start()])[-1]
+    return ": " if "," in clause else ", "
+
+
+def plain_punctuation(text: str) -> str:
+    """Rewrite em and en dashes as ordinary punctuation.
+
+    Deliberately not a general prettifier: it fixes the one habit that reads as
+    machine-written and leaves everything else the model wrote alone.
+    """
+    text = _NUMERIC_RANGE.sub("-", text)
+    text = _DASH_AFTER_WORD.sub(_dash_replacement, text)
+    # A dash that followed punctuation or opened a line has no comma to become.
+    text = _DASH_ANY.sub(" ", text)
+    text = re.sub(r",\s*,", ",", text)
+    text = re.sub(r"([.!?;:])\s*,\s*", r"\1 ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    # Spaces and tabs only: collapsing newlines would run paragraphs together.
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    # A dash that opened a line leaves the space that followed it behind. This
+    # text is always prose, never indented content, so a leading space is noise.
+    return re.sub(r"^[ \t]+", "", text, flags=re.MULTILINE)
+
+
+def _clean_strings(value: Any) -> Any:
+    """Apply `plain_punctuation` to every string inside a parsed JSON value."""
+    if isinstance(value, str):
+        return plain_punctuation(value)
+    if isinstance(value, list):
+        return [_clean_strings(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _clean_strings(item) for key, item in value.items()}
+    return value
+
+
 class LLMError(RuntimeError):
     """The model returned nothing usable."""
 
@@ -192,7 +246,7 @@ def complete(
         raise LLMError(
             "Response hit max_tokens and is truncated -- raise DEFAULT_MAX_TOKENS."
         )
-    return text
+    return plain_punctuation(text)
 
 
 # Structured outputs are a request, not a guarantee, once a gateway is in the
@@ -313,7 +367,7 @@ def complete_json(
             raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
 
         try:
-            return _extract_json_object(text)
+            return _clean_strings(_extract_json_object(text))
         except LLMError as exc:
             last_error = exc
             if attempt == JSON_REPAIR_ATTEMPTS:

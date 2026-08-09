@@ -18,7 +18,7 @@ in the repository's history.
 
 If a key is ever committed, treat it as compromised the moment it is pushed:
 revoke it at <https://console.anthropic.com/settings/keys> first, then rewrite
-history. Rotating after a public push is not optional — automated scrapers find
+history. Rotating after a public push is not optional: automated scrapers find
 keys in public repositories within minutes.
 
 The application never logs key material. The startup banner reports only the
@@ -40,7 +40,7 @@ compatible endpoint. Two cautions:
 
 `candidates.json` is synthetic fixture data provided with the challenge. It is
 committed deliberately so the project is reproducible from a clone. Do not add
-real candidate records to this repository — it is public. Interview transcripts
+real candidate records to this repository; it is public. Interview transcripts
 are held in process memory only (`app/session_store.py`) and are lost on
 restart; there is no persistence layer and none should be added without a
 retention decision.
@@ -52,7 +52,7 @@ as conversation turns. An answer can therefore attempt to steer the
 interviewer. The current mitigations are structural rather than absolute:
 
 - The engine, not the model, chooses which day is asked next. A candidate cannot
-  talk their way onto easier material — day selection is deterministic and
+  talk their way onto easier material; day selection is deterministic and
   derived from their cohort record.
 - Feedback is produced with structured outputs, so the response shape is
   enforced by the API rather than requested in prose.

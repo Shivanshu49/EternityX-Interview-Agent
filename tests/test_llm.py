@@ -11,6 +11,7 @@ lands on the one response a candidate actually reads.
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -176,6 +177,74 @@ def test_empty_reply_is_reported_as_empty():
     client = ScriptedClient("")
     with pytest.raises(llm.LLMError, match="no text"):
         llm.complete_json(PAYLOAD, SCHEMA, client=client)
+
+
+# --------------------------------------------------------------------------
+# House style: no em dashes in anything the candidate reads
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        # The shapes the model actually produced in live runs.
+        ("Good instinct — recall before prompting.", "Good instinct, recall before prompting."),
+        ("That's a real bug—good catch.", "That's a real bug, good catch."),
+        # A comma is already in play, so a third one would splice two questions
+        # together. The real shape this came from, verbatim off a live run.
+        ("Why does that matter, though — what breaks about cosine similarity?",
+         "Why does that matter, though: what breaks about cosine similarity?"),
+        # The comma belongs to an earlier sentence, so this clause is still clean.
+        ("Right, I see. Good instinct — recall first.",
+         "Right, I see. Good instinct, recall first."),
+        # Number ranges must stay ranges, not become comma splices.
+        ("Days 7—10 cover embeddings.", "Days 7-10 cover embeddings."),
+        ("Range 21–24.", "Range 21-24."),
+        # A dash with no clause in front of it has no comma to become.
+        ("— then what?", "then what?"),
+        ("Right. — What next?", "Right. What next?"),
+        # Nothing to do.
+        ("A plain sentence with no dashes.", "A plain sentence with no dashes."),
+        ("Hyphenated words like top-k stay intact.", "Hyphenated words like top-k stay intact."),
+    ],
+)
+def test_dashes_become_ordinary_punctuation(raw, expected):
+    assert llm.plain_punctuation(raw) == expected
+
+
+def test_no_dash_survives_any_rewrite():
+    messy = "One — two–three―four, — five. Days 7—10."
+    assert not re.search(r"[—–―]", llm.plain_punctuation(messy))
+
+
+def test_paragraph_breaks_are_preserved():
+    """Collapsing newlines would run a multi-paragraph summary together."""
+    out = llm.plain_punctuation("First para — here.\n\nSecond para — there.")
+    assert out == "First para, here.\n\nSecond para, there."
+
+
+def test_questions_are_cleaned_on_the_way_out():
+    client = ScriptedClient("Nice — so what breaks at scale?")
+    assert llm.complete(PAYLOAD, client=client) == "Nice, so what breaks at scale?"
+
+
+def test_feedback_strings_are_cleaned_including_inside_lists():
+    payload = {
+        "summary": "Strong on retrieval — weak on agents.",
+        "strengths": ["Named ChromaDB — with metadata filters."],
+    }
+    client = ScriptedClient(json.dumps(payload))
+    result = llm.complete_json(PAYLOAD, SCHEMA, client=client)
+
+    assert result["summary"] == "Strong on retrieval, weak on agents."
+    assert result["strengths"] == ["Named ChromaDB, with metadata filters."]
+
+
+def test_interviewer_and_reviewer_prompts_both_forbid_dashes():
+    from app import feedback_engine, prompts
+
+    assert "em dash" in prompts.SYSTEM_PROMPT
+    assert "em dash" in feedback_engine.FEEDBACK_SYSTEM_PROMPT
 
 
 # --------------------------------------------------------------------------

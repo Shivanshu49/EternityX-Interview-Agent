@@ -1,8 +1,8 @@
 # EternityX Interview Agent
 
 An AI interview agent that conducts **personalized, multi-turn technical interviews**
-driven by a candidate's real AI Cohort learning signals — attempts, skips, and
-first-try passes — and delivers a structured evaluation report.
+driven by a candidate's real AI Cohort learning signals (attempts, skips, and
+first-try passes) and delivers a structured evaluation report.
 
 ## Why signals matter
 
@@ -12,7 +12,7 @@ candidate actually struggled with and probes *there*:
 | Signal | Interpretation | Interview behaviour |
 | --- | --- | --- |
 | High attempts, eventual pass | Grinded to a solution; understanding may be shallow | Probe the *why*, not the *what* |
-| Skipped | Avoided the topic — gap or low confidence | Start easy, scaffold upward |
+| Skipped | Avoided the topic: gap or low confidence | Start easy, scaffold upward |
 | First-try pass | Genuine fluency | Skip basics, push to depth/edge cases |
 
 ## Architecture
@@ -32,7 +32,7 @@ app/
   report.py           Seam from routes to feedback_engine (A/B)
 frontend/index.html   Chat UI, served at /                (C)
 scripts/              Offline sanity + curriculum checks
-tests/                Test suite (134)
+tests/                Test suite (149)
 curriculum.json       The real 31-day cohort syllabus
 ```
 
@@ -51,7 +51,7 @@ cp .env.example .env      # then put a real key in ANTHROPIC_API_KEY
 uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000/> — the chat UI is served by the same app, so that
+Open <http://127.0.0.1:8000/>. The chat UI is served by the same app, so that
 URL is the demo.
 
 ### Provider
@@ -68,15 +68,15 @@ which needs two variables rather than one:
 
 Setting the key without the base URL is the failure worth knowing about: the SDK
 sends a gateway key to `api.anthropic.com`, which rejects it. A model the
-endpoint does not carry fails differently — HTTP 503, *no available channel for
-model* — and only on the first question, so it is worth confirming against
+endpoint does not carry fails differently, with HTTP 503 (*no available channel
+for model*) on the first question only, so it is worth confirming a name against
 `/v1/models` before changing `LLM_MODEL`.
 
 One capability does **not** carry across providers. Anthropic enforces
 `output_config.format` server-side; AgentRouter accepts the field and drops it,
 so a schema alone does not guarantee JSON. The end-of-interview report therefore
 states its schema in the prompt as well, parses replies that arrive fenced or
-wrapped in prose, and retries once with the fault named — see `complete_json` in
+wrapped in prose, and retries once with the fault named. See `complete_json` in
 `app/llm.py` and `tests/test_llm.py`. Without that, an interview runs all eight
 questions and then fails on the report, which is the only response the candidate
 actually reads.
@@ -98,7 +98,7 @@ The key's length is logged; its value never is.
 Run the tests and the offline checks without a key:
 
 ```bash
-pytest -q                              # 134 tests, no network
+pytest -q                              # 149 tests, no network
 python scripts/sanity_check.py         # day selection against a stub
 python scripts/check_curriculum.py     # curriculum vs the engine's assumptions
 ```

@@ -107,7 +107,7 @@
     <button class="primary" id="send" disabled>Send</button>
   </form>
   <div class="finished-bar">
-    <span>Interview complete — feedback is above.</span>
+    <span>Interview complete, feedback is above.</span>
     <button class="primary" id="again">Start another</button>
   </div>
 </footer>
@@ -205,7 +205,7 @@ async function post(body) {
     });
   } catch {
     // Raw fetch rejections read as "Failed to fetch", which tells the user nothing.
-    throw new Error("Could not reach the server — check that it is still running.");
+    throw new Error("Could not reach the server, check that it is still running.");
   }
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON error body */ }
@@ -277,7 +277,7 @@ $("composer").addEventListener("submit", async (event) => {
   // The final turn writes the whole assessment, so it takes noticeably longer
   // than a question. Say so rather than let the wait read as a hang.
   const note = answered >= 7
-    ? "Reviewing the full interview and writing your feedback — this one takes a few seconds…"
+    ? "Reviewing the full interview and writing your feedback. This takes a few seconds…"
     : "Thinking…";
   answered += 1;
   const sent = await exchange({ message }, note);

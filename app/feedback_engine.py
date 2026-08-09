@@ -165,7 +165,9 @@ Do not invent a numeric score, grade, or rating. Do not comment on any day that 
 is not in the evidence below. If the interview was too short to judge \
 something, say so plainly rather than filling space.
 
-Write for a hiring manager who did not watch the interview.
+Write for a hiring manager who did not watch the interview. Punctuate plainly: \
+commas, full stops, question marks. Never use an em dash or an en dash; use a \
+comma or a new sentence instead.
 
 Fields:
 - summary: two or three sentences. What kind of engineer is this, and what did \

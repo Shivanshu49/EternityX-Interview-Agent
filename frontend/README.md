@@ -1,7 +1,7 @@
 # Frontend
 
 Single-page chat UI for the interview agent. No build step, no dependencies, no
-CDN — one `index.html` served by FastAPI at `/`, so the deployed URL is the demo.
+CDN. One `index.html` served by FastAPI at `/`, so the deployed URL is the demo.
 
 ## Running
 
@@ -22,6 +22,6 @@ relative to itself, so no CORS setup is involved.
 | Final turn | `{sessionId, message}` | `{reply, done: true, feedback: {...}}` |
 
 `sessionId` is generated per interview in the browser. The candidate payload is
-editable in the page — a sample is pre-filled so the demo runs with one click.
+editable in the page, and a sample is pre-filled so the demo runs with one click.
 Non-2xx responses surface the API's `detail` string inline rather than failing
 silently.
