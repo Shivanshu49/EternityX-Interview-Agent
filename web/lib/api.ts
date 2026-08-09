@@ -3,10 +3,16 @@ import type { InterviewResponse } from "./types";
 /**
  * Backend base URL. Baked in at build time:
  *   - local dev: defaults to the FastAPI dev server on :8000
- *   - Vercel:    set NEXT_PUBLIC_API_URL in the project's environment variables
+ *   - production: defaults to the deployed Render API
+ *   - any deploy: NEXT_PUBLIC_API_URL overrides the environment default
  */
+const DEFAULT_API_BASE =
+  process.env.NODE_ENV === "production"
+    ? "https://eternityx-interview-agent.onrender.com"
+    : "http://localhost:8000";
+
 export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+  process.env.NEXT_PUBLIC_API_URL ?? DEFAULT_API_BASE
 ).replace(/\/+$/, "");
 
 export class ApiError extends Error {
