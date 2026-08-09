@@ -15,6 +15,56 @@ candidate actually struggled with and probes *there*:
 | Skipped | Avoided the topic: gap or low confidence | Start easy, scaffold upward |
 | First-try pass | Genuine fluency | Skip basics, push to depth/edge cases |
 
+It also calibrates to who the candidate is. The cohort runs from an intern with
+no professional experience to a distinguished engineer with 28 years, and
+several candidates came from outside engineering entirely, so `jobRole` and
+`yearsExperience` set the depth and the vocabulary. Asked about the same day,
+a distinguished engineer gets *"what would you want to see in the failure logs
+before you'd reach for fine-tuning instead of fixing the prompt"*, while a
+marketing manager gets *"someone hands you the URL and says it's live, what
+would you check first?"*. Same standard, different ground.
+
+## Showing the work
+
+The day is chosen deterministically from the cohort record before the model
+writes a word. Add `?explain=1` and the response carries that reasoning:
+
+```json
+{
+  "reply": "Let's shift to security for a bit...",
+  "done": false,
+  "trace": {
+    "day": 27, "day_title": "Security, Privacy & Guardrails",
+    "tier": "SKIPPED", "pattern": "avoided", "move": "scaffold",
+    "reason": "Skipped the day 27 mission outright -- worth hearing whether they can reason about it anyway.",
+    "is_follow_up": false, "questions_asked": 1, "days_covered": [27]
+  }
+}
+```
+
+The chat UI renders it under each question, toggleable in the header. It is a
+query parameter rather than a body field precisely so the request and response
+the specification defines are byte-identical when it is absent.
+
+## Coverage
+
+One band per topic the brief names, so an interview walks across the syllabus
+instead of pooling in whichever module the candidate struggled with most:
+
+| Band | Days |
+| --- | --- |
+| Embeddings/Vector | 7-10 |
+| RAG | 11 |
+| Prompt Engineering | 12-13 |
+| Agentic AI/MCP | 21-24 |
+| Deployment | 27-28 |
+| Production | 29-31 |
+
+Bands are topics, not modules: module 4 spans days 11-15 but mixes RAG,
+prompting and fine-tuning, so it is split. When ranking ties, a band nothing has
+been asked about yet wins, and if no band at all has been reached by the fourth
+question the choice is forced into one.
+
 ## Architecture
 
 ```
@@ -32,7 +82,7 @@ app/
   report.py           Seam from routes to feedback_engine (A/B)
 frontend/index.html   Chat UI, served at /                (C)
 scripts/              Offline sanity + curriculum checks
-tests/                Test suite (149)
+tests/                Test suite (183)
 curriculum.json       The real 31-day cohort syllabus
 ```
 
@@ -98,7 +148,7 @@ The key's length is logged; its value never is.
 Run the tests and the offline checks without a key:
 
 ```bash
-pytest -q                              # 149 tests, no network
+pytest -q                              # 183 tests, no network
 python scripts/sanity_check.py         # day selection against a stub
 python scripts/check_curriculum.py     # curriculum vs the engine's assumptions
 ```

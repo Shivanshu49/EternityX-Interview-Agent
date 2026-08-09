@@ -149,6 +149,48 @@ def test_flagship_coverage_is_forced_by_the_fourth_pick(curriculum):
     assert "coverage" in pick.reason.lower()
 
 
+def test_every_topic_the_brief_names_has_a_band(curriculum):
+    """RAG, vector DBs, prompting, agentic/MCP, deployment and production.
+
+    Coverage is what stops an interview pooling in the first module a candidate
+    struggled with, so a named topic without a band is a topic that can be
+    missed entirely.
+    """
+    named = {
+        "Embeddings/Vector": qe.VECTOR_DAYS,
+        "RAG": qe.RAG_DAYS,
+        "Prompt Engineering": qe.PROMPTING_DAYS,
+        "Agentic AI/MCP": qe.AGENTIC_DAYS,
+        "Deployment": qe.DEPLOYMENT_DAYS,
+        "Production": qe.PRODUCTION_DAYS,
+    }
+    assert {name for _, name in qe._BAND_NAMES} == set(named)
+    for band in named.values():
+        assert band <= qe.FLAGSHIP_DAYS
+
+
+def test_bands_do_not_overlap():
+    """An overlapping band would make the rotation double-count a topic."""
+    seen: set[int] = set()
+    for days, name in qe._BAND_NAMES:
+        assert not (days & seen), f"{name} overlaps an earlier band"
+        seen |= days
+
+
+def test_rotation_walks_across_topics_rather_than_pooling(curriculum):
+    """With nothing to separate days on signal, coverage should spread."""
+    candidate = candidate_with()  # no mission rows: every day is NO_DATA
+    covered: list[int] = []
+    for _ in range(6):
+        pick = qe.pick_next_day(candidate, covered, curriculum)
+        covered.append(pick.day)
+
+    bands_hit = {
+        name for days, name in qe._BAND_NAMES if days & set(covered)
+    }
+    assert len(bands_hit) >= 5, f"only reached {bands_hit} in six picks"
+
+
 def test_coverage_rule_stays_on_until_satisfied(curriculum):
     candidate = candidate_with(Mission(day=2, skipped=True), Mission(day=6, skipped=True))
     assert qe.pick_next_day(candidate, [1, 2, 3, 4, 5], curriculum).day in qe.FLAGSHIP_DAYS

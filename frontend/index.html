@@ -37,6 +37,7 @@
     .msg { max-width: 92%; }
   }
   header .sid { color: var(--muted); font: 12px ui-monospace, monospace; }
+  .explain-toggle { display: flex; align-items: center; gap: .35rem; color: var(--muted); font-size: .82rem; cursor: pointer; user-select: none; }
   header .spacer { flex: 1; }
   button {
     font: inherit; padding: .45rem .9rem; border-radius: 6px; cursor: pointer;
@@ -61,6 +62,14 @@
     border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
   }
   .who { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .2rem; }
+  /* Why the engine chose this day. Sits under the question it explains, dimmed
+     so it reads as an annotation rather than as something the interviewer said. */
+  .why { align-self: flex-start; max-width: 85%; margin-top: -.4rem; font-size: .78rem; color: var(--muted); }
+  .why summary { font-size: .78rem; }
+  .why dl { margin: .4rem 0 0; display: grid; grid-template-columns: auto 1fr; gap: .15rem .6rem; }
+  .why dt { text-transform: uppercase; letter-spacing: .05em; font-size: .66rem; padding-top: .1rem; }
+  .why dd { margin: 0; color: var(--ink); }
+  .why .tag { font: 11px ui-monospace, monospace; background: var(--them); border: 1px solid var(--line); border-radius: 4px; padding: .05rem .3rem; }
   .msg.me .who { color: #cfe0da; }
   footer { border-top: 1px solid var(--line); padding: .75rem 1rem; background: var(--panel); }
   .finished-bar { display: none; max-width: 46rem; margin: 0 auto; align-items: center;
@@ -87,6 +96,7 @@
   <h1>EternityX Interview Agent</h1>
   <span class="sid" id="sid"></span>
   <span class="spacer"></span>
+  <label class="explain-toggle"><input type="checkbox" id="explain" checked> Show reasoning</label>
   <button id="restart">New interview</button>
 </header>
 
@@ -155,6 +165,47 @@ function bubble(cls, who, text) {
   return el;
 }
 
+// The engine picks the day deterministically from the candidate's cohort record
+// before the model writes a word. Showing that is the difference between an
+// interview that is adaptive and one that merely looks it.
+function renderWhy(trace) {
+  const box = document.createElement("details");
+  box.className = "why";
+
+  const summary = document.createElement("summary");
+  summary.textContent = trace.is_follow_up
+    ? `Why this follow-up (day ${trace.day})`
+    : `Why day ${trace.day}${trace.day_title ? ": " + trace.day_title : ""}`;
+  box.appendChild(summary);
+
+  const rows = [
+    ["Reason", trace.reason],
+    ["Signal", `${trace.tier} / ${trace.pattern}`, true],
+    ["Tactic", trace.move, true],
+    ["Progress", `question ${trace.questions_asked}, days covered ${trace.days_covered.join(", ")}`],
+  ];
+
+  const dl = document.createElement("dl");
+  for (const [label, value, mono] of rows) {
+    if (!value) continue;
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (mono) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = value;
+      dd.appendChild(tag);
+    } else {
+      dd.textContent = value;
+    }
+    dl.append(dt, dd);
+  }
+  box.appendChild(dl);
+  log.appendChild(box);
+  return box;
+}
+
 function renderFeedback(fb) {
   const box = document.createElement("div");
   box.className = "report";
@@ -197,8 +248,11 @@ function sessionStarted() { return $("setup").dataset.started === "1"; }
 
 async function post(body) {
   let res;
+  // Opt in per request, so the response stays exactly what the spec defines
+  // whenever the reasoning panel is switched off.
+  const url = $("explain").checked ? `${API}?explain=1` : API;
   try {
-    res = await fetch(API, {
+    res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ sessionId, ...body })
@@ -232,6 +286,7 @@ async function exchange(body, thinkingNote) {
       document.body.classList.add("is-done");
     } else if (data.reply) {
       bubble("them", "Interviewer", data.reply);
+      if (data.trace) renderWhy(data.trace);
     }
     return true;
   } catch (err) {

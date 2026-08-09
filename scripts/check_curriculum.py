@@ -25,9 +25,13 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "curriculum.json"
 
 # Each flagship constant, the module title it is supposed to track, and the
 # keywords to fall back on when the file declares no modules.
+# Only bands that are a whole module are listed. The others (RAG, prompting,
+# deployment) are deliberate sub-slices of a mixed module, so comparing them to
+# a module's day range would always fail.
 BANDS = {
     "AGENTIC_DAYS": (qe.AGENTIC_DAYS, "agentic", ("agent", "mcp", "tool use", "orchestr")),
     "VECTOR_DAYS": (qe.VECTOR_DAYS, "vector", ("embed", "vector", "retriev", "chunk", "rag")),
+    "PRODUCTION_DAYS": (qe.PRODUCTION_DAYS, "production", ("monitor", "observab", "production", "capstone")),
 }
 
 problems: list[str] = []

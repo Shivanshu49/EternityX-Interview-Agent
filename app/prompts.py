@@ -118,24 +118,107 @@ MOVE_GUIDANCE: dict[QuestionKind, str] = {
 # --------------------------------------------------------------------------
 
 
+# Words that mark a role as a building role. Tested by presence rather than by
+# listing the non-technical titles, so a job title nobody anticipated defaults to
+# the plainer register instead of assuming vocabulary the candidate may not have.
+_ENGINEERING_HINTS = (
+    "engineer", "developer", "architect", "programmer", "scientist", "devops",
+    "sre", "computer science", "software", "data", "technical", "it ",
+)
+
+# Titles that outrank a year count. A principal with 8 years is not a mid.
+_SENIOR_TITLES = ("principal", "distinguished", "staff", "lead", "head", "director", "vp")
+_JUNIOR_TITLES = ("intern", "junior", "trainee", "graduate", "apprentice")
+
+SENIOR_YEARS = 12
+EARLY_YEARS = 2
+
+
+def render_calibration(candidate: Candidate) -> str:
+    """How hard to push, and in what vocabulary.
+
+    Seniority changes what a good question is, not how demanding it is. A
+    distinguished engineer should not be asked what an embedding is, and an
+    intern should not be asked to defend a rollout strategy they have never
+    owned. Neither should be talked down to.
+    """
+    role = (candidate.member.job_role or "").lower()
+    years = candidate.member.years_experience
+
+    senior = any(t in role for t in _SENIOR_TITLES) or (
+        years is not None and years >= SENIOR_YEARS
+    )
+    early = any(t in role for t in _JUNIOR_TITLES) or (
+        years is not None and years <= EARLY_YEARS
+    )
+    builds = any(h in role for h in _ENGINEERING_HINTS)
+
+    if senior and not early:
+        depth = (
+            "This is a senior engineer. Skip definitions entirely; they will find "
+            "them insulting. Ask about tradeoffs, failure modes, and what they "
+            "would do differently at scale. It is fair to disagree with them and "
+            "see how they defend a position."
+        )
+    elif early:
+        depth = (
+            "This is an early-career candidate. Fundamentals are fair game and "
+            "worth confirming, but ask them about what they actually built rather "
+            "than about production experience they have not had yet. Do not "
+            "soften the question, just aim it at ground they have stood on."
+        )
+    else:
+        depth = (
+            "This is a mid-level engineer. Assume the vocabulary and go after "
+            "reasoning: why their approach works, and where it stops working."
+        )
+
+    # Only when a role is actually stated. Absent data is not evidence that the
+    # candidate works outside engineering.
+    if role and not builds:
+        register = (
+            " They do not work in an engineering role, so they came to this "
+            "cohort from outside the field. Judge them on what they built and "
+            "understood, at the same standard, but drop the insider shorthand and "
+            "do not assume production or systems experience."
+        )
+    else:
+        register = ""
+
+    return depth + register
+
+
 def render_candidate_profile(candidate: Candidate) -> str:
     """The stable, once-per-interview framing: who this is and how they worked."""
     s = candidate.signals
+    member = candidate.member
     total = len(candidate.missions)
     skipped = sum(1 for m in candidate.missions if m.skipped)
     ground = sum(1 for m in candidate.missions if m.attempts > 2)
 
+    who = f"You are interviewing {candidate.display_name}"
+    if member.job_role:
+        who += f", a {member.job_role}"
+        if member.years_experience is not None:
+            years = member.years_experience
+            who += (
+                " with no professional experience yet" if years == 0
+                else f" with {years} year{'' if years == 1 else 's'} of experience"
+            )
+    who += ", who just completed a 31-day AI engineering cohort."
+
     return (
-        f"You are interviewing {candidate.display_name}, who just completed a "
-        f"31-day AI engineering cohort.\n\n"
+        f"{who}\n\n"
+        f"{render_calibration(candidate)}\n\n"
         f"How they worked, across {total} missions:\n"
         f"- Committed code on {s.commit_days} of 31 days\n"
         f"- Completed {s.missions_completed} missions, "
         f"{s.missions_first_try} of them on the first try\n"
         f"- Skipped {skipped} missions outright\n"
         f"- Needed more than two attempts on {ground} missions\n\n"
-        "This is background for you only. Never quote these numbers to the "
-        "candidate.\n\n"
+        "This is background for you only. Never quote these numbers at the "
+        "candidate, and never mention their job title or years of experience "
+        "back to them. Let it shape the question, not the wording.\n\n"
         "I will give you one day of the curriculum at a time, along with how they "
         "did on it. Ask your question and wait."
     )

@@ -712,3 +712,61 @@ provider both are accepted and dropped. The schema is still sent, so running
 against Anthropic directly loses nothing.
 
 ---
+
+## Entry 016: Making the engine visible, and calibrating to the person
+**Date:** 2026-08-09
+**Author:** A (Shivanshu)
+**Tool:** Cursor (Opus 5)
+**Stage:** 6, Differentiation
+
+### Prompt
+
+> Now tell me what improvements I should make in this project to stand out from
+> others, optimise it, and make it one of the best interview agents. Make a plan
+> for it.
+
+### Intent
+
+Find what separates this build from every other team's, then do the parts with
+the best ratio of judge-visible impact to risk.
+
+### Outcome
+
+The review found three things that were designed and never wired: the whole
+`AnswerEvaluation` grading path, `signals.update_belief()` with its `DayProfile`
+mastery tracking, and `InterviewReport`/`DayVerdict`. Adaptivity therefore ran
+entirely on `is_shallow()`, which counts words and regex-matches acronyms.
+Logged here rather than fixed: closing that loop is the next and larger job.
+
+Three things shipped instead, chosen because they change what a reviewer
+actually perceives:
+
+- **The reasoning was computed and thrown away.** Every turn produces a tier, a
+  cohort pattern, a tactic and a justification, and `routes.py` discarded all of
+  it before building the response, which made a genuinely adaptive engine look
+  like a chat wrapper. Now exposed via `?explain=1` and rendered under each
+  question in the UI.
+- **`jobRole` and `yearsExperience` were parsed and ignored.** The cohort spans
+  an intern with no experience to a distinguished engineer with 28 years, and
+  several candidates are not engineers at all. Depth and vocabulary now follow
+  the record.
+- **Coverage missed two topics the brief names.** Deployment and production
+  systems had no band, so an interview could skip them entirely. Six bands now,
+  one per named topic.
+
+Suite 149 -> 183.
+
+### Notes
+
+The trace is a query parameter, not a body field, so the request and response
+shapes the specification defines are byte-identical without it. A differentiator
+that risks failing a contract check is not worth having.
+
+Exposing the trace immediately paid for itself by finding a real bug. The live
+panel showed an empty tactic and day title, because `QuestionResult` sets
+`from_attributes=True` and pydantic reads only *declared* fields off an object.
+Those two lived in `extra`, so they survived every test (which passes dicts, and
+dicts do keep extras) and were dropped on the one path that matters, where the
+engine returns a `NextQuestion`. Both are now declared, with a regression test
+that constructs the real model rather than a dict. The general lesson is that a
+fixture shaped differently from production can hide a whole class of bug.

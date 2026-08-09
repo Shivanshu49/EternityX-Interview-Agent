@@ -6,6 +6,7 @@ import pytest
 
 from app import question_engine, report
 from app.curriculum import CURRICULUM
+from app.models import QuestionKind, QuestionMode
 from app.session_store import get_session
 
 
@@ -264,6 +265,139 @@ def test_question_failure_does_not_commit_candidate_answer(
     assert response.status_code == 503
     assert get_session("session-1")["history"] == original_history
     assert get_session("session-1")["questions_asked"] == 1
+
+
+# --------------------------------------------------------------------------
+# ?explain=1: the engine's reasoning, without disturbing the spec'd contract
+# --------------------------------------------------------------------------
+
+
+def install_reasoned_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A schedule that carries the selection metadata a real pick would."""
+
+    plan = [
+        {"day": 22, "tier": "SKIPPED", "pattern": "avoided", "move": "scaffold",
+         "reason": "Skipped the day 22 mission outright.", "is_follow_up": False,
+         "day_title": "Agentic AI"},
+        {"day": 22, "tier": "SKIPPED", "pattern": "avoided", "move": "probe_depth",
+         "reason": "Last answer on day 22 was too thin to score.", "is_follow_up": True,
+         "day_title": "Agentic AI"},
+        {"day": 7, "tier": "VERIFY", "pattern": "fluent", "move": "edge_case",
+         "reason": "First-try pass on day 7.", "is_follow_up": False,
+         "day_title": "Embeddings"},
+    ]
+
+    def fake(session: dict, curriculum: dict, client=None) -> dict:
+        entry = plan[session["questions_asked"]]
+        return {"reply": f"Question {session['questions_asked'] + 1}", **entry}
+
+    monkeypatch.setattr(question_engine, "next_question", fake)
+
+
+def test_trace_survives_the_engine_returning_its_own_model(
+    client, candidate, monkeypatch
+):
+    """The engine returns a NextQuestion object, not a dict.
+
+    `from_attributes=True` reads only declared fields off an object, so a field
+    that exists solely as `extra` is dropped on this path while surviving on the
+    dict path every other test here uses. That difference silently blanked the
+    tactic and the day title in the live UI.
+    """
+    def fake(session: dict, curriculum: dict, client=None):
+        return question_engine.NextQuestion(
+            day=22,
+            reply="Question 1",
+            tier="SKIPPED",
+            pattern="avoided",
+            reason="Skipped it outright.",
+            is_follow_up=False,
+            day_title="Agentic AI & MCP",
+            mode=QuestionMode.OPENING,
+            move=QuestionKind.SCAFFOLD,
+        )
+
+    monkeypatch.setattr(question_engine, "next_question", fake)
+
+    trace = client.post(
+        "/api/interview?explain=1",
+        json={"sessionId": "session-1", "candidate": candidate},
+    ).json()["trace"]
+
+    assert trace["move"] == "scaffold", "tactic must survive object validation"
+    assert trace["day_title"] == "Agentic AI & MCP"
+    assert trace["tier"] == "SKIPPED"
+
+
+def test_response_carries_no_trace_unless_it_is_asked_for(
+    client, candidate, monkeypatch
+):
+    """The shape the specification defines must be untouched by default."""
+    install_reasoned_question(monkeypatch)
+    assert start(client, candidate).json() == {"reply": "Question 1", "done": False}
+
+
+def test_explain_exposes_why_the_engine_chose_this_day(
+    client, candidate, monkeypatch
+):
+    install_reasoned_question(monkeypatch)
+
+    body = client.post(
+        "/api/interview?explain=1",
+        json={"sessionId": "session-1", "candidate": candidate},
+    ).json()
+
+    assert body["reply"] == "Question 1"
+    assert body["trace"] == {
+        "day": 22,
+        "day_title": "Agentic AI",
+        "tier": "SKIPPED",
+        "pattern": "avoided",
+        "move": "scaffold",
+        "reason": "Skipped the day 22 mission outright.",
+        "is_follow_up": False,
+        "questions_asked": 1,
+        "days_covered": [22],
+    }
+
+
+def test_trace_marks_a_follow_up_and_accumulates_coverage(
+    client, candidate, monkeypatch
+):
+    install_reasoned_question(monkeypatch)
+    start(client, candidate)
+
+    second = client.post(
+        "/api/interview?explain=1",
+        json={"sessionId": "session-1", "message": "short"},
+    ).json()["trace"]
+    assert second["is_follow_up"] is True
+    assert second["days_covered"] == [22], "a follow-up adds depth, not coverage"
+
+    third = client.post(
+        "/api/interview?explain=1",
+        json={"sessionId": "session-1", "message": "a longer answer"},
+    ).json()["trace"]
+    assert third["days_covered"] == [7, 22]
+    assert third["questions_asked"] == 3
+    assert third["tier"] == "VERIFY"
+
+
+def test_explain_can_be_toggled_per_request(client, candidate, monkeypatch):
+    install_reasoned_question(monkeypatch)
+    start(client, candidate)
+
+    with_trace = client.post(
+        "/api/interview?explain=true",
+        json={"sessionId": "session-1", "message": "answer"},
+    ).json()
+    without = client.post(
+        "/api/interview",
+        json={"sessionId": "session-1", "message": "answer"},
+    ).json()
+
+    assert "trace" in with_trace
+    assert "trace" not in without
 
 
 def test_feedback_failure_does_not_commit_final_answer(

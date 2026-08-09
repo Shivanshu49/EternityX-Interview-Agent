@@ -8,7 +8,13 @@ from pydantic import ValidationError
 
 from app import question_engine, report
 from app.curriculum import CURRICULUM
-from app.models import Feedback, InterviewRequest, InterviewResponse, QuestionResult
+from app.models import (
+    Feedback,
+    InterviewRequest,
+    InterviewResponse,
+    QuestionResult,
+    QuestionTrace,
+)
 from app.session_store import (
     can_finish,
     create_session,
@@ -69,13 +75,33 @@ def _record_question(session: dict[str, Any], question: QuestionResult) -> None:
     session["questions_asked"] += 1
 
 
+def _trace(session: dict[str, Any], question: QuestionResult) -> QuestionTrace:
+    """Expose the selection reasoning the engine already produced."""
+    return QuestionTrace(
+        day=question.day,
+        day_title=question.day_title or "",
+        tier=question.tier or "",
+        pattern=question.pattern or "",
+        move=question.move or "",
+        reason=question.reason or "",
+        is_follow_up=bool(question.is_follow_up),
+        questions_asked=session["questions_asked"],
+        days_covered=sorted(set(session["days_covered"])),
+    )
+
+
 @router.post(
     "/api/interview",
     response_model=InterviewResponse,
     response_model_exclude_none=True,
 )
-def interview(request: InterviewRequest) -> InterviewResponse:
-    """Start an interview, process one answer, or return final feedback."""
+def interview(request: InterviewRequest, explain: bool = False) -> InterviewResponse:
+    """Start an interview, process one answer, or return final feedback.
+
+    `?explain=1` adds the engine's selection reasoning to the response. It is a
+    query parameter rather than a body field so the request and response the
+    specification defines are untouched when it is absent.
+    """
 
     is_start = request.candidate is not None and request.message is None
     is_turn = request.message is not None and request.candidate is None
@@ -105,7 +131,11 @@ def interview(request: InterviewRequest) -> InterviewResponse:
             delete_session(request.session_id)
             raise
         _record_question(session, question)
-        return InterviewResponse(reply=question.reply, done=False)
+        return InterviewResponse(
+            reply=question.reply,
+            done=False,
+            trace=_trace(session, question) if explain else None,
+        )
 
     session = get_session(request.session_id)
     if session is None:
@@ -137,4 +167,8 @@ def interview(request: InterviewRequest) -> InterviewResponse:
     question = _next_question(working_session)
     _record_question(working_session, question)
     update_session(request.session_id, **working_session)
-    return InterviewResponse(reply=question.reply, done=False)
+    return InterviewResponse(
+        reply=question.reply,
+        done=False,
+        trace=_trace(working_session, question) if explain else None,
+    )

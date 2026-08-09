@@ -144,13 +144,22 @@ class CohortSignals(BaseModel):
 
 
 class Member(BaseModel):
-    """Who the candidate is. Shape is owned upstream, so unknown keys pass through."""
+    """Who the candidate is. Shape is owned upstream, so unknown keys pass through.
 
-    model_config = ConfigDict(extra="allow")
+    `job_role` and `years_experience` are declared rather than left to `extra`
+    because the interviewer calibrates on them: the cohort runs from a intern
+    with no professional experience to a distinguished engineer with nearly
+    thirty years, and the same question does not serve both.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     id: str | None = None
     name: str | None = None
     email: str | None = None
+    job_role: str | None = Field(None, alias="jobRole")
+    years_experience: int | None = Field(None, alias="yearsExperience", ge=0)
+    education: str | None = None
 
 
 class Candidate(BaseModel):
@@ -345,7 +354,14 @@ class InterviewRequest(BaseModel):
 
 
 class QuestionResult(BaseModel):
-    """Contract returned by the question engine."""
+    """Contract returned by the question engine.
+
+    Every field the trace reports is declared here rather than left to `extra`.
+    With `from_attributes=True` pydantic reads only declared fields off an
+    object, so an undeclared one is silently dropped when the engine returns a
+    `NextQuestion` and silently kept when a test hands over a dict -- which is
+    exactly the kind of difference that passes tests and fails in production.
+    """
 
     model_config = ConfigDict(extra="allow", from_attributes=True)
 
@@ -355,6 +371,9 @@ class QuestionResult(BaseModel):
     pattern: str | None = None
     reason: str | None = None
     is_follow_up: bool | None = None
+    day_title: str | None = None
+    mode: str | None = None
+    move: str | None = None
 
 
 class Feedback(BaseModel):
@@ -402,12 +421,33 @@ class Feedback(BaseModel):
     )
 
 
+class QuestionTrace(BaseModel):
+    """Why the engine asked what it asked.
+
+    The selection reasoning is computed on every turn and was previously
+    discarded before the response was built, which made a genuinely adaptive
+    engine indistinguishable from a chat wrapper. It is opt-in via `?explain=1`
+    so the response the specification defines is unchanged by default.
+    """
+
+    day: int
+    day_title: str = ""
+    tier: str = Field(description="Priority tier, e.g. 'SKIPPED'")
+    pattern: str = Field(description="Cohort signal, e.g. 'avoided'")
+    move: str = Field(description="Interview tactic, e.g. 'scaffold'")
+    reason: str = Field(description="Plain-language justification for this day")
+    is_follow_up: bool = False
+    questions_asked: int = 0
+    days_covered: list[int] = Field(default_factory=list)
+
+
 class InterviewResponse(BaseModel):
     """Successful response from the interview endpoint."""
 
     reply: str
     done: bool
     feedback: Feedback | None = None
+    trace: QuestionTrace | None = None
 
 
 # --------------------------------------------------------------------------

@@ -42,20 +42,43 @@ from app.signals import GRINDER_ATTEMPT_THRESHOLD, classify, opening_move
 # Curriculum bands
 # --------------------------------------------------------------------------
 #
-# Three stretches of the cohort carry most of the hiring signal, so the interview
-# guarantees at least one of them gets covered even if the candidate's record
-# points elsewhere. They double as the "high-value" set: a first-try pass here is
-# worth verifying, because these are the days where luck and understanding look
-# most alike from the outside.
+# One band per topic the challenge brief names: RAG, vector databases, prompt
+# engineering, agentic AI, MCP, deployment, and production systems. The
+# interview guarantees at least one band is covered even when the candidate's
+# record points elsewhere, and prefers a band it has not touched when ranking
+# ties, so a single interview walks across topics instead of pooling in one.
+#
+# They double as the "high-value" set: a first-try pass here is worth verifying,
+# because these are the days where luck and understanding look most alike from
+# the outside.
+#
+# Bands are topics, not modules. Module 4 spans days 11-15 but mixes RAG,
+# prompting and fine-tuning, so it is split; module 7 spans 25-28 but only its
+# back half is about shipping.
 
-AGENTIC_DAYS = frozenset(range(21, 25))  # Agentic AI / MCP
-VECTOR_DAYS = frozenset(range(7, 11))    # Embeddings / Vector search
-RAG_DAYS = frozenset({11})               # RAG End-to-End & LLM API Basics
-FLAGSHIP_DAYS = AGENTIC_DAYS | VECTOR_DAYS | RAG_DAYS
+VECTOR_DAYS = frozenset(range(7, 11))      # Embeddings / vector search
+RAG_DAYS = frozenset({11})                 # RAG end-to-end & LLM API basics
+PROMPTING_DAYS = frozenset({12, 13})       # Prompt engineering, incl. tool schemas
+AGENTIC_DAYS = frozenset(range(21, 25))    # Agentic AI / MCP
+DEPLOYMENT_DAYS = frozenset({27, 28})      # Guardrails, Docker/Kubernetes
+PRODUCTION_DAYS = frozenset(range(29, 32))  # Observability, readiness, capstone
+
+FLAGSHIP_DAYS = (
+    VECTOR_DAYS | RAG_DAYS | PROMPTING_DAYS
+    | AGENTIC_DAYS | DEPLOYMENT_DAYS | PRODUCTION_DAYS
+)
 HIGH_VALUE_DAYS = FLAGSHIP_DAYS
 
-# Human-readable band names, for the audit trail on a forced pick.
-_BAND_NAMES = ((AGENTIC_DAYS, "Agentic AI/MCP"), (RAG_DAYS, "RAG"), (VECTOR_DAYS, "Embeddings/Vector"))
+# Human-readable band names, for the audit trail on a forced pick. Ordered as
+# the cohort teaches them, so the rotation walks the syllabus forwards.
+_BAND_NAMES = (
+    (VECTOR_DAYS, "Embeddings/Vector"),
+    (RAG_DAYS, "RAG"),
+    (PROMPTING_DAYS, "Prompt Engineering"),
+    (AGENTIC_DAYS, "Agentic AI/MCP"),
+    (DEPLOYMENT_DAYS, "Deployment"),
+    (PRODUCTION_DAYS, "Production"),
+)
 
 # By the Nth distinct day we probe, one flagship day must be among them.
 COVERAGE_DEADLINE = 4
