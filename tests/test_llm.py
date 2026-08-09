@@ -50,6 +50,14 @@ class ScriptedClient:
         )
 
 
+class RawStringClient(ScriptedClient):
+    """Gateway shape observed in production: create() returns text directly."""
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+
+
 # --------------------------------------------------------------------------
 # Extracting an object from an unconstrained reply
 # --------------------------------------------------------------------------
@@ -118,6 +126,17 @@ def test_original_payload_is_not_mutated():
     before = json.dumps(PAYLOAD, sort_keys=True)
     llm.complete_json(PAYLOAD, SCHEMA, client=ScriptedClient(json.dumps(VALID)))
     assert json.dumps(PAYLOAD, sort_keys=True) == before
+
+
+def test_plain_completion_accepts_a_gateway_string_response():
+    assert llm.complete(PAYLOAD, client=RawStringClient("Gateway question.")) == (
+        "Gateway question."
+    )
+
+
+def test_structured_completion_accepts_a_gateway_string_response():
+    client = RawStringClient(json.dumps(VALID))
+    assert llm.complete_json(PAYLOAD, SCHEMA, client=client) == VALID
 
 
 # --------------------------------------------------------------------------

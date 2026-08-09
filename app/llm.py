@@ -125,6 +125,27 @@ def _clean_strings(value: Any) -> Any:
     return value
 
 
+def _response_text(message: Any) -> str:
+    """Normalize Anthropic SDK and gateway-compatible response shapes.
+
+    The official SDK returns a Message containing typed content blocks. Some
+    compatible gateways return the generated text directly, and others expose
+    ``content`` as a plain string. All three represent the same logical result.
+    """
+    if isinstance(message, str):
+        return message.strip()
+
+    content = getattr(message, "content", None)
+    if isinstance(content, str):
+        return content.strip()
+    if not content:
+        return ""
+
+    return "".join(
+        block.text for block in content if getattr(block, "type", None) == "text"
+    ).strip()
+
+
 class LLMError(RuntimeError):
     """The model returned nothing usable."""
 
@@ -236,9 +257,7 @@ def complete(
     if stop_reason == "refusal":
         raise LLMRefusal(f"Request declined by safety classifiers ({model}).")
 
-    text = "".join(
-        block.text for block in message.content if getattr(block, "type", None) == "text"
-    ).strip()
+    text = _response_text(message)
 
     if not text:
         raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
@@ -358,11 +377,7 @@ def complete_json(
                 "FEEDBACK_MAX_TOKENS."
             )
 
-        text = "".join(
-            block.text
-            for block in message.content
-            if getattr(block, "type", None) == "text"
-        ).strip()
+        text = _response_text(message)
         if not text:
             raise LLMError(f"Model returned no text (stop_reason={stop_reason!r}).")
 
